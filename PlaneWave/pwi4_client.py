@@ -231,7 +231,7 @@ class PWI4:
           mount_model_disable_point(*range(20)) # Disable the first 20 points
           mount_model_disable_point(            # Disable all points
               *range(
-                  pwi4.status().mount.model.num_points_total
+                  pw.status().mount.model.num_points_total
                ))
         """
 

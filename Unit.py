@@ -1,25 +1,52 @@
 import logging
 
 from PlaneWave import pwi4_client
+from PlaneWave.platesolve import platesolve
 import time
 from typing import TypeAlias
-from Camera import Camera
-import json
+import Camera, Covers, Stage, Mount, Power
+from astropy.io import fits
+import tempfile
+import os
+import numpy as np
 
 UnitType: TypeAlias = "Unit"
 
 logger = logging.getLogger('mast.unit')
 
+MAX_UNITS = 20
+
 
 class UnitStatus:
 
+    power: Power.PowerStatus
+    camera: Camera.CameraStatus
+    stage: Stage.StageStatus
+    mount: Mount.MountStatus
+    cover: Covers.CoversStatus
+
     def __init__(self, u: UnitType):
+        if u.power is not None:
+            self.power = u.power.status()
+        if u.power.is_on('Camera') and u.camera is not None:
+            self.camera = u.camera.status()
+        if u.power.is_on('Stage') and u.stage is not None:
+            self.stage = u.stage.status()
+        if u.power.is_on('Cover') and u.covers is not None:
+            self.cover = u.covers.status()
+        if u.power.is_on('Mount') and u.mount is not None:
+            self.mount = u.mount.status()
+
+        self.is_operational = \
+            (self.power is not None and self.power.is_operational) and \
+            (self.mount is not None and self.mount.is_operational) and \
+            (self.camera is not None and self.camera.is_operational) and \
+            (self.cover is not None and self.cover.is_operational) and \
+            (self.stage is not None and self.stage.is_operational)
+
         self.is_guiding = u.guiding
         self.is_autofocusing = u.is_autofocusing
         self.is_connected = u.connected
-        if u.camera is not None and u.camera.connected:
-            self.camera = u.camera.status()
-
         self.is_busy = self.is_autofocusing or self.is_guiding
 
 
@@ -28,39 +55,78 @@ class Unit:
     _connected: bool = False
     _is_guiding: bool = False
     _is_autofocusing = False
-    _id = None
+    id = None
+
+    reasons: list = []   # list of reasons for the last True/False query
+    mount: Mount
+    covers: Covers
+    stage: Stage
+    power: Power
+    pw: pwi4_client.PWI4
 
     def __init__(self, unit_id: int):
-        self._id = unit_id
-        self.pwi4 = pwi4_client.PWI4()
-        # self.camera = Camera('ASCOM.PlaneWaveVirtual.Camera')
-        self.camera = Camera('ASCOM.Simulator.Camera')
-        logger.info('initialized')
+        if unit_id < 0 or unit_id > MAX_UNITS:
+            raise f'Unit id must be between 0 and {MAX_UNITS}'
+
+        self.id = unit_id
+        try:
+            self.pw = pwi4_client.PWI4()
+            self.camera = Camera.Camera('ASCOM.PlaneWaveVirtual.Camera')
+            self.covers = Covers.Covers('ASCOM.PlaneWave.CoverCalibrator')
+            self.mount = Mount.Mount()
+            self.stage = Stage.Stage()
+            self.power = Power.Power(self.id)
+            logger.info('initialized')
+        except Exception as ex:
+            logger.exception(ex)
 
     def startup(self):
-        """
-        Makes the MAST unit operational.  Called before the actual workload begins.
-        """
-        # self.connect_to_mount()
-        # self.enable_motors()
-        # self.find_home()
-        # self.fans_on()
-        # self.covers_open()
+        if not self.connected:
+            return
+
+        self.power.startup()
+
+        self.mount.connected = True
+        self.camera.connected = True
+        self.stage.connected = True
+        self.covers.connected = True
+
+        self.mount.startup()
+        self.stage.startup()
         self.camera.startup()
-        # return self.pwi4.status()
+        self.covers.startup()
+        # return self.pw.status()
 
     def shutdown(self):
-        """
-        Makes the unit idle
-        :return:
-        """
-        # self.fans_off()
-        # self.covers_open()
+        if not self.connected:
+            raise 'Not connected'
+
+        self.mount.shutdown()
+        self.covers.shutdown()
         self.camera.shutdown()
+        self.stage.shutdown()
+
+        self.mount.connected = False
+        self.camera.connected = False
+        self.stage.connected = False
+        self.covers.connected = False
+
+        self.power.shutdown()
 
     @property
     def connected(self):
-        return self._connected
+        self.reasons = []
+        pw_status = self.pw.status()
+        if not pw_status.mount.is_connected:
+            self.reasons.append('Mount not connected')
+        if not self.camera.connected:
+            self.reasons.append('Camera not connected')
+        if not self.stage.connected:
+            self.reasons.append('Stage not connected')
+        if not self.covers.connected:
+            self.reasons.append('Covers not connected')
+
+        return True if len(self.reasons) == 0 else False
 
     @connected.setter
     def connected(self, value):
@@ -69,109 +135,39 @@ class Unit:
         :param value:
         :return:
         """
+
+        self.power.connected = True
+        self.mount.connected = True
+        self.camera.connected = True
+        self.covers.connected = True
+        self.stage.connected = True
         if not value == self._connected:
             self._connected = value
 
-    def fans_on(self):
-        return self.pwi4.request("/fans/on")
+    def connect(self):
+        self.connected = True
 
-    def fans_off(self):
-        return self.pwi4.request("/fans/off")
-
-    def covers_open(self):
-        """
-        Opens the telescope covers
-        TBD: maybe get open/close status, to optimize
-        :return:
-        """
-        pass
-
-    def covers_close(self):
-        """
-        Opens the telescope covers
-        TBD: maybe get open/close status, to optimize
-        :return:
-        """
-        pass
-
-    def connect_to_mount(self):
-        if not self.pwi4.status().mount.is_connected:
-            print("mast: Connecting to mount...", end='', flush=True)
-            self.pwi4.mount_connect()
-            while not self.pwi4.status().mount.is_connected:
-                time.sleep(1)
-            print("Done")
-        else:
-            print("mast: Mount is connected")
-
-    def enable_motors(self):
-        status = self.pwi4.status()
-        if not status.mount.axis0.is_enabled:
-            print("mast: Enabling HA motors...", end='', flush=True)
-            self.pwi4.mount_enable(0)
-            while not self.pwi4.status().mount.axis0.is_enabled:
-                time.sleep(1)
-            print("done")
-        else:
-            print("mast: HA motor is enabled")
-
-        if not status.mount.axis1.is_enabled:
-            print("Enabling DEC motors...", end='', flush=True)
-            self.pwi4.mount_enable(1)
-            while not self.pwi4.status().mount.axis1.is_enabled:
-                time.sleep(1)
-            print("done")
-        else:
-            print("mast: DEC motor is enabled")
-
-    def find_home(self):
-        print("mast: Finding home...", end='', flush=True)
-        self.pwi4.mount_find_home()
-        last_axis0_position_degrees = -99999
-        last_axis1_position_degrees = -99999
-        while True:
-            status = self.pwi4.status()
-            delta_axis0_position_degrees = status.mount.axis0.position_degs - last_axis0_position_degrees
-            delta_axis1_position_degrees = status.mount.axis1.position_degs - last_axis1_position_degrees
-
-            if abs(delta_axis0_position_degrees) < 0.001 and abs(delta_axis1_position_degrees) < 0.001:
-                break
-
-            last_axis0_position_degrees = status.mount.axis0.position_degs
-            last_axis1_position_degrees = status.mount.axis1.position_degs
-
-            time.sleep(1)
-        print("Done")
+    def disconnect(self):
+        self.connected = False
 
     def start_autofocus(self):
-        if self.pwi4.status().autofocus.is_running:
-            print("mast: Autofocus is running")
+        if self.pw.status().autofocus.is_running:
+            logger.info("autofocus already running")
             return
+        self.pw.request("/autofocus/start")
+        logger.info('autofocus started')
 
-        self._is_autofocusing = True
-        print("mast: Starting autofocus", flush=True, end='')
-        self.pwi4.request("/autofocus/start")
-        time.sleep(2)   # let it start
-        while self.pwi4.status().autofocus.is_running:
-            time.sleep(5)
-            print(".", flush=True, end='')
-        print("done. ", flush=True, end='')
-        st = self.pwi4.status()
-        if st.autofocus.success:
-            print(f"best_position={st.autofocus.best_position}, tolerance={st.autofocus.tolerance}")
-        else:
-            print("FAILED")
-
-        self._is_autofocusing = False
-        return st
-
-    def stop_autofocusing(self):
-        self.pwi4.request("/autofocus/stop")
-        self._is_autofocusing = False
+    def stop_autofocus(self):
+        if not self.pw.status().autofocus.is_running:
+            logger.info("autofocus not running")
+            return
+        self.pw.request("/autofocus/stop")
+        logger.info('autofocus stopped')
 
     @property
     def is_autofocusing(self):
-        return self._is_autofocusing
+        st = self.pw.status()
+        return st.autofocus.is_running
 
     def start_guiding(self):
         self._is_guiding = True
@@ -189,3 +185,40 @@ class Unit:
 
     def status(self):
         return UnitStatus(self)
+
+    def test_solving(self, exposure: float):
+        if not self.camera.connected:
+            raise Exception('Camera not connected')
+
+        pw_stat = self.pw.request_with_status('/status')
+        if not pw_stat.mount.is_connected:
+            raise Exception('Mount not connected')
+        if not pw_stat.mount.is_tracking:
+            raise Exception('Mount is not tracking')
+
+        ra = pw_stat.mount.ra_j2000_hours
+        dec = pw_stat.dec_j2000_degs
+
+        try:
+            self.camera.start_exposure(exposure, True)
+            time.sleep(.5)
+        except:
+            raise
+
+        while not self.camera.ascom.ImageReady:
+            time.sleep(1)
+        image = self.camera.ascom.ImageArray
+
+        header = fits.Header()
+        header['NAXIS'] = 2
+        header['NAXIS1'] = image.shape[1]
+        header['NAXIS2'] = image.shape[0]
+        hdu = fits.PrimaryHDU(data=image.astype(np.float32), header=header)
+
+        fits_file = tempfile.TemporaryFile(mode='w', prefix='platesolve-', suffix='.fits')
+        hdu.writeto(fits_file)
+
+        result = platesolve(fits_file, self.camera.PixelSizeX)
+        os.remove(fits_file)
+
+        return result

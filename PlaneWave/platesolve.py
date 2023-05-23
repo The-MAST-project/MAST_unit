@@ -11,7 +11,8 @@ from subprocess import Popen, PIPE
 import tempfile
 
 # Point this to the location of the "ps3cli.exe" executable
-PS3CLI_EXE = os.path.expanduser("~/ps3cli/ps3cli.exe")
+# PS3CLI_EXE = os.path.expanduser("~/ps3cli/ps3cli.exe")
+PS3CLI_EXE = os.path.expanduser("~/Downloads/PlaneWave/ps3cli/ps3cli.exe")
 
 # For testing purposes...
 #PS3CLI_EXE = r"C:\Users\kmi\Desktop\Planewave work\Code\PWGit\PWCode\ps3cli\bin\Debug\ps3cli.exe"
@@ -20,10 +21,13 @@ PS3CLI_EXE = os.path.expanduser("~/ps3cli/ps3cli.exe")
 # Set this to the path where the PlateSolve catalogs are located.
 # The directory specified here should contain "UC4" and "Orca" subdirectories.
 # If this is None, we will try to use the default catalog location
-PS3_CATALOG = None
+# PS3_CATALOG = None
+PS3_CATALOG = os.path.expanduser("~/Downloads/PlaneWave/Platesolve3.80/Kepler")
+
 
 def is_linux():
     return platform.system() == "Linux"
+
 
 def get_default_catalog_location():
     if is_linux():
@@ -32,8 +36,8 @@ def get_default_catalog_location():
         return os.path.expanduser("~\\Documents\\Kepler")
 
 
-def platesolve(image_file, arcsec_per_pixel):
-    stdout_destination = None  # Replace with PIPE if we want to capture the output rather than displaying on the console
+def platesolve(image_file: str, arcsec_per_pixel: float):
+    stdout_destination = PIPE # None  # Replace with PIPE if we want to capture the output rather than displaying on the console
 
     output_file_path = os.path.join(tempfile.gettempdir(), "ps3cli_results.txt")
 
@@ -62,7 +66,7 @@ def platesolve(image_file, arcsec_per_pixel):
             )
 
     (stdout, stderr) = process.communicate()  # Obtain stdout and stderr output from the wcs tool
-    exit_code = process.wait() # Wait for process to complete and obtain the exit code
+    exit_code = process.wait()  # Wait for process to complete and obtain the exit code
 
     if exit_code != 0:
         raise Exception("Error finding solution.\n" +
@@ -70,6 +74,7 @@ def platesolve(image_file, arcsec_per_pixel):
                         "Error output: " + stderr)
     
     return parse_platesolve_output(output_file_path)
+
 
 def parse_platesolve_output(output_file):
     f = open(output_file)

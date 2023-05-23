@@ -2,21 +2,22 @@ import uvicorn
 from fastapi import FastAPI, Request
 from PlaneWave import pwi4_client
 from Unit import Unit
+from starlette.responses import Response
+import json
+from typing import Any
 
 import logging
 
 unit_id = 17
-
 logger = logging.getLogger('mast')
 logger.setLevel(logging.INFO)
 
 handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-
+handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
-logger.info('MAST Server')
+logger.info('initialized')
 
 app = FastAPI()
 pw = pwi4_client.PWI4()
@@ -24,12 +25,25 @@ unit = Unit(unit_id)
 root = '/mast/api/v1/'
 
 
-@app.get(root + 'status')
+class PrettyJSONResponse(Response):
+    media_type = "application/json"
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=4,
+            separators=(", ", ": "),
+        ).encode("utf-8")
+
+
+@app.get(root + 'status', response_class=PrettyJSONResponse)
 def pw_status(request: Request):
     return pw.status()
 
 
-@app.get(root + 'unit/{method}')
+@app.get(root + 'unit/{method}', response_class=PrettyJSONResponse)
 def do_unit(method: str, request: Request):
     params = request.query_params
 
