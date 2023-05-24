@@ -1,9 +1,9 @@
-
+import win32com.client
 import logging
 from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
-from threading import Timer
+from utils import Activities, RepeatTimer, AscomDriverInfo
 
 logger = logging.getLogger('mast.unit.mount')
 
@@ -23,6 +23,7 @@ class MountActivity(Flag):
 class MountStatus:
 
     def __init__(self, m: MountType):
+        self.ascom = AscomDriverInfo(m.ascom)
         st = m.pw.status()
         self.is_operational = \
             st.mount.is_connected and \
@@ -40,17 +41,18 @@ class MountStatus:
             self.activities |= MountActivity.Slewing
 
 
-class Mount:
+class Mount(Activities):
 
     pw: pwi4_client
     activities: MountActivity = MountActivity.Idle
-    timer: Timer
+    timer: RepeatTimer
     last_axis0_position_degrees: int = -99999
     last_axis1_position_degrees: int = -99999
 
     def __init__(self):
         self.pw = pwi4_client.PWI4()
-        self.timer = Timer(2, function=self.ontimer)
+        self.ascom = win32com.client.Dispatch('ASCOM.PWI4.Telescope')
+        self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'mount-timer'
         self.timer.start()
         logger.info('initialized')
@@ -81,34 +83,29 @@ class Mount:
             logger.exception(ex)
 
     def startup(self):
-        self.activities |= MountActivity.StartingUp
-        logger.info('startup - started')
+        self.start_activity(MountActivity.StartingUp, logger)
         self.pw.request('/fans/on')
         self.find_home()
-        logger.info('startup - done')
-        self.activities &= ~MountActivity.StartingUp
+        self.end_activity(MountActivity.StartingUp, logger)
 
     def shutdown(self):
-        self.activities |= MountActivity.ShuttingDown
-        logger.info('shutdown - started')
+        self.start_activity(MountActivity.ShuttingDown, logger)
         self.pw.request('/fans/off')
         self.park()
-        logger.info('shutdown - done')
-        self.activities &= ~MountActivity.ShuttingDown
+        self.end_activity(MountActivity.ShuttingDown, logger)
 
     def park(self):
-        self.activities |= MountActivity.Parking
+        self.start_activity(MountActivity.Parking, logger)
         self.pw.mount_park()
 
     def find_home(self):
-        self.activities |= MountActivity.FindingHome
-        logger.info('find home - started')
+        self.start_activity(MountActivity.FindingHome, logger)
         self.last_axis0_position_degrees = -99999
         self.last_axis1_position_degrees = -99999
         self.pw.mount_find_home()
 
     def ontimer(self):
-        if self.activities & MountActivity.FindingHome:
+        if self.is_active(MountActivity.FindingHome) and self.ascom.Connected:
             status = self.pw.status()
             delta_axis0_position_degrees = status.mount.axis0.position_degs - self.last_axis0_position_degrees
             delta_axis1_position_degrees = status.mount.axis1.position_degs - self.last_axis1_position_degrees
@@ -117,14 +114,15 @@ class Mount:
             self.last_axis1_position_degrees = status.mount.axis1.position_degs
 
             if abs(delta_axis0_position_degrees) < 0.001 and abs(delta_axis1_position_degrees) < 0.001:
-                self.activities &= ~MountActivity.FindingHome
+                self.end_activity(MountActivity.FindingHome, logger)
                 self.last_axis0_position_degrees = -99999
                 self.last_axis1_position_degrees = -99999
-                logger.info('find home - done')
 
-        self.timer = Timer(2, function=self.ontimer)
-        self.timer.name = 'mount-timer'
-        self.timer.start()
+        if self.is_active(MountActivity.Parking) and self.ascom.Connected:
+            parking_ra = self.ascom.SiderealTime
+            parking_dec = self.ascom.SiteLatitude
+            if abs(self.ascom.RightAscension - parking_ra) <= 0.1 and abs(self.ascom.Declination - parking_dec) < 0.1:
+                self.end_activity(MountActivity.Parking, logger)
 
     def status(self) -> MountStatus:
         return MountStatus(self)

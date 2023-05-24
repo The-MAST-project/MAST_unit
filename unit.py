@@ -4,7 +4,11 @@ from PlaneWave import pwi4_client
 from PlaneWave.platesolve import platesolve
 import time
 from typing import TypeAlias
-import Camera, Covers, Stage, Mount, Power
+import camera
+import covers
+import stage
+import mount
+import power
 from astropy.io import fits
 import tempfile
 import os
@@ -19,11 +23,11 @@ MAX_UNITS = 20
 
 class UnitStatus:
 
-    power: Power.PowerStatus
-    camera: Camera.CameraStatus
-    stage: Stage.StageStatus
-    mount: Mount.MountStatus
-    cover: Covers.CoversStatus
+    power: power.PowerStatus
+    camera: camera.CameraStatus
+    stage: stage.StageStatus
+    mount: mount.MountStatus
+    cover: covers.CoversStatus
 
     def __init__(self, u: UnitType):
         if u.power is not None:
@@ -58,10 +62,10 @@ class Unit:
     id = None
 
     reasons: list = []   # list of reasons for the last True/False query
-    mount: Mount
-    covers: Covers
-    stage: Stage
-    power: Power
+    mount: mount
+    covers: covers
+    stage: stage
+    power: power
     pw: pwi4_client.PWI4
 
     def __init__(self, unit_id: int):
@@ -71,11 +75,11 @@ class Unit:
         self.id = unit_id
         try:
             self.pw = pwi4_client.PWI4()
-            self.camera = Camera.Camera('ASCOM.PlaneWaveVirtual.Camera')
-            self.covers = Covers.Covers('ASCOM.PlaneWave.CoverCalibrator')
-            self.mount = Mount.Mount()
-            self.stage = Stage.Stage()
-            self.power = Power.Power(self.id)
+            self.camera = camera.Camera('ASCOM.PlaneWaveVirtual.Camera')
+            self.covers = covers.Covers('ASCOM.PlaneWave.CoverCalibrator')
+            self.mount = mount.Mount()
+            self.stage = stage.Stage()
+            self.power = power.Power(self.id)
             logger.info('initialized')
         except Exception as ex:
             logger.exception(ex)
@@ -186,7 +190,7 @@ class Unit:
     def status(self):
         return UnitStatus(self)
 
-    def test_solving(self, exposure: float):
+    def test_solving(self, exposure_seconds: int):
         if not self.camera.connected:
             raise Exception('Camera not connected')
 
@@ -200,10 +204,10 @@ class Unit:
         dec = pw_stat.dec_j2000_degs
 
         try:
-            self.camera.start_exposure(exposure, True)
+            self.camera.start_exposure(exposure_seconds, True, readout_mode=0)
             time.sleep(.5)
-        except:
-            raise
+        except Exception as ex:
+            logger.exception('plate solve failed:', ex)
 
         while not self.camera.ascom.ImageReady:
             time.sleep(1)

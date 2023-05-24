@@ -2,7 +2,7 @@
 import logging
 from enum import Enum, Flag
 import datetime
-from threading import Timer
+from utils import RepeatTimer
 from typing import TypeAlias
 
 logger = logging.getLogger('mast.unit.stage')
@@ -50,13 +50,13 @@ class Stage:
     ticks_at_start: int
     ticks_at_target: int
     motion_start_time: datetime
-    timer: Timer
+    timer: RepeatTimer
     activities: StageActivities
 
     def __init__(self):
         self.state = StageState.Idle
         self._connected = False
-        self.timer = Timer(1, function=self.ontimer)
+        self.timer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'mast.stage'
         self.timer.start()
         self.activities = StageActivities.Idle
@@ -129,10 +129,6 @@ class Stage:
 
             self.position = pos
             logger.info(f'ontimer: position={self.position}')
-
-        self.timer = Timer(2, function=self.ontimer)
-        self.timer.name = 'stage-timer'
-        self.timer.start()
 
     def move(self, where: StageState):
         if not self.connected:

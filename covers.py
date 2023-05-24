@@ -2,6 +2,7 @@ import win32com.client
 import logging
 from enum import Enum
 from typing import TypeAlias
+from utils import AscomDriverInfo
 
 logger = logging.getLogger('mast.unit.covers')
 
@@ -24,7 +25,7 @@ class CoversState(Enum):
     Error = 5
 
 
-class Covers:
+class Covers():
     """
     Uses the PlaneWave ASCOM driver for the mirror covers
     """
@@ -61,6 +62,7 @@ class Covers:
         st.state_verbal = st.state.name
         st.is_connected = self.connected
         st.is_operational = self.connected and st.state == CoversState.Open
+        st.ascom = AscomDriverInfo(self.ascom)
         return st
 
     def open(self):

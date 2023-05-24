@@ -1,10 +1,9 @@
-import time
 import win32com.client
 from typing import TypeAlias
 import logging
 import astropy.units as u
 from enum import Flag
-from threading import Timer
+from utils import AscomDriverInfo, RepeatTimer
 
 CameraType: TypeAlias = "Camera"
 
@@ -28,6 +27,7 @@ class CameraStatus:
     cooler_power: float # percent
 
     def __init__(self, c: CameraType):
+        self.ascom = AscomDriverInfo(c.ascom)
         self.temperature = c.ascom.CCDTemperature
         self.cooler_power = c.ascom.CoolerPower
         self.is_operational = abs(self.temperature - c.operational_set_point) <= 0.5
@@ -51,7 +51,7 @@ class Camera:
     Yrad: float
     ascom = None
     activities: CameraActivities = CameraActivities.Idle
-    timer: Timer
+    timer: RepeatTimer
     image = None
 
     def __init__(self, driver: str, set_point: float = None):
@@ -60,7 +60,7 @@ class Camera:
         except Exception as ex:
             logger.exception(ex)
             raise ex
-        timer = Timer(2, function=self.ontimer)
+        timer = RepeatTimer(2, function=self.ontimer)
         timer.name = 'mast.camera'
         timer.start()
         logger.info('initialized')
@@ -169,7 +169,3 @@ class Camera:
                 self.activities &= ~CameraActivities.WarmingUp
                 self.activities &= ~CameraActivities.ShuttingDown
                 logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')
-
-        self.timer = Timer(2, function=self.ontimer)
-        self.timer.name = 'camera-timer'
-        self.timer.start()
