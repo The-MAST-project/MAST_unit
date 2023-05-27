@@ -3,6 +3,7 @@ from enum import Enum
 import logging
 import time
 from typing import TypeAlias
+from mastapi import Mastapi
 
 PowerType: TypeAlias = "Power"
 
@@ -61,6 +62,9 @@ class Power:
         self.sockets.append(Socket(name='Stage', state=PowerState.Off))
         self.sockets.append(Socket(name='Cover', state=PowerState.Off))
 
+        for func in [self.connect, self.disconnect, self.power, self.status, self.startup, self.shutdown]:
+            Mastapi.api_method(func)
+
     @property
     def connected(self):
         # get the real number of sockets, names and states
@@ -69,6 +73,12 @@ class Power:
     @connected.setter
     def connected(self, value):
         pass
+
+    def connect(self):
+        self.connected = True
+
+    def disconnect(self):
+        self.connected = False
 
     def name2id(self, name: str) -> int:
         for index, socket in enumerate(self.sockets):

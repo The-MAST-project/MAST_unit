@@ -4,6 +4,7 @@ from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
 from utils import Activities, RepeatTimer, AscomDriverInfo
+from mastapi import Mastapi
 
 logger = logging.getLogger('mast.unit.mount')
 
@@ -54,8 +55,18 @@ class Mount(Activities):
         self.ascom = win32com.client.Dispatch('ASCOM.PWI4.Telescope')
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'mount-timer'
+
+        for func in [self.startup, self.shutdown, self.connect, self.disconnect, self.park, self.status]:
+            Mastapi.api_method(func)
+
         self.timer.start()
         logger.info('initialized')
+
+    def connect(self):
+        self.connected = True
+
+    def disconnect(self):
+        self.connected = False
 
     @property
     def connected(self) -> bool:

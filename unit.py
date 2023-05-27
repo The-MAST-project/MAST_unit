@@ -1,5 +1,4 @@
 import logging
-
 from PlaneWave import pwi4_client
 from PlaneWave.platesolve import platesolve
 import time
@@ -13,6 +12,7 @@ from astropy.io import fits
 import tempfile
 import os
 import numpy as np
+from mastapi import Mastapi
 
 UnitType: TypeAlias = "Unit"
 
@@ -61,7 +61,7 @@ class Unit:
     _is_autofocusing = False
     id = None
 
-    reasons: list = []   # list of reasons for the last True/False query
+    reasons: list = []   # list of reasons for the last query
     mount: mount
     covers: covers
     stage: stage
@@ -83,6 +83,15 @@ class Unit:
             logger.info('initialized')
         except Exception as ex:
             logger.exception(ex)
+
+        for func in [
+            self.startup, self.shutdown,
+            self.connect, self.disconnect,
+            self.status,
+            self.start_guiding,  self.stop_guiding,
+            self.start_autofocus, self.stop_autofocus
+        ]:
+            Mastapi.api_method(func)
 
     def startup(self):
         if not self.connected:

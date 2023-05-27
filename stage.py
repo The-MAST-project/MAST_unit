@@ -4,6 +4,7 @@ from enum import Enum, Flag
 import datetime
 from utils import RepeatTimer
 from typing import TypeAlias
+from mastapi import Mastapi
 
 logger = logging.getLogger('mast.unit.stage')
 
@@ -22,6 +23,7 @@ class StageStatus:
     state_verbal: str
     activities: StageActivities
     activities_verbal: str
+    api_methods: list
 
 
 class StageState(Enum):
@@ -35,7 +37,7 @@ class StageState(Enum):
     Parked = Out
 
 
-class Stage:
+class Stage(Mastapi):
 
     MIN_TICKS = 0
     MAX_TICKS = 50000
@@ -56,6 +58,10 @@ class Stage:
     def __init__(self):
         self.state = StageState.Idle
         self._connected = False
+
+        for func in [self.connect, self.disconnect, self.startup, self.shutdown, self.status, self.move]:
+            Mastapi.api_method(func)
+
         self.timer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'mast.stage'
         self.timer.start()
@@ -86,11 +92,33 @@ class Stage:
         self._connected = value
         logger.info(f'connected = {value}')
 
+    def connect(self):
+        """
+        Connects to the MAST stage controller
+        :return:
+        """
+        self.connected = True
+
+    def disconnect(self):
+        """
+        Disconnects from the MAST stage controller
+        :return:
+        """
+        self.connected = False
+
     def startup(self):
+        """
+        Startup routine for the MAST stage.  Makes it operational
+        :return:
+        """
         if self.state is not StageState.Operational:
             self.move(StageState.Operational)
 
     def shutdown(self):
+        """
+        Shutdown routine for the MAST stage.  Makes it idle
+        :return:
+        """
         self.move(StageState.Parked)
 
     @property
@@ -102,6 +130,10 @@ class Stage:
         self._position = value
 
     def status(self) -> StageStatus:
+        """
+        Returns the status of the MAST stage
+        :return:
+        """
         st = StageStatus()
         st.state = self.state
         st.state_verbal = st.state.name

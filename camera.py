@@ -4,6 +4,7 @@ import logging
 import astropy.units as u
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer
+from mastapi import Mastapi
 
 CameraType: TypeAlias = "Camera"
 
@@ -60,6 +61,17 @@ class Camera:
         except Exception as ex:
             logger.exception(ex)
             raise ex
+
+        for func in [self.connect, self.disconnect,
+                     self.startup, self.shutdown,
+                     self.start_exposure, self.stop_exposure,
+                     self.cooldown, self.warmup]:
+            Mastapi.api_method(func)
+
+        # for member in inspect.getmembers(self):
+        #     if inspect.ismethod(member[1]):
+        #         print(f'method: {member[1]}')
+
         timer = RepeatTimer(2, function=self.ontimer)
         timer.name = 'mast.camera'
         timer.start()
@@ -84,6 +96,12 @@ class Camera:
             self.Xrad = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
             self.Yrad = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         logger.info(f'connected = {value}')
+
+    def connect(self):
+        self.connected = True
+
+    def disconnect(self):
+        self.connected = False
 
     def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
         if not self.connected:
