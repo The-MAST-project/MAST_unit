@@ -245,6 +245,7 @@ class Unit:
         """
         :return The status of the ``unit`` subsystem:
         :rtype UnitStatus:
+        :mastapi:
         """
         return UnitStatus(self)
 
