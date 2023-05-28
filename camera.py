@@ -3,8 +3,7 @@ from typing import TypeAlias
 import logging
 import astropy.units as u
 from enum import Flag
-from utils import AscomDriverInfo, RepeatTimer
-from mastapi import Mastapi
+from utils import AscomDriverInfo, RepeatTimer, return_with_status
 
 CameraType: TypeAlias = "Camera"
 
@@ -62,12 +61,6 @@ class Camera:
             logger.exception(ex)
             raise ex
 
-        for func in [self.connect, self.disconnect,
-                     self.startup, self.shutdown,
-                     self.start_exposure, self.stop_exposure,
-                     self.cooldown, self.warmup]:
-            Mastapi.api_method(func)
-
         # for member in inspect.getmembers(self):
         #     if inspect.ismethod(member[1]):
         #         print(f'method: {member[1]}')
@@ -97,12 +90,15 @@ class Camera:
             self.Yrad = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         logger.info(f'connected = {value}')
 
+    @return_with_status
     def connect(self):
         self.connected = True
 
+    @return_with_status
     def disconnect(self):
         self.connected = False
 
+    @return_with_status
     def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
         if not self.connected:
             raise "Not Connected"
@@ -117,6 +113,7 @@ class Camera:
         self.ascom.StartExposure(seconds, shutter)
         logger.info(f'exposure started (seconds={seconds}, shutter={shutter})')
 
+    @return_with_status
     def stop_exposure(self):
         if self.ascom.CanAbortExposure:
             try:
@@ -130,10 +127,12 @@ class Camera:
     def status(self) -> CameraStatus:
         return CameraStatus(self)
 
+    @return_with_status
     def startup(self):
         if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
             self.cooldown()
 
+    @return_with_status
     def cooldown(self):
         if not self.ascom.Connected:
             return
@@ -148,10 +147,12 @@ class Camera:
             logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
             self.ascom.SetCCDTemperature = self.operational_set_point
 
+    @return_with_status
     def shutdown(self):
         if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
             self.warmup()
 
+    @return_with_status
     def warmup(self):
         if not self.ascom.Connected:
             return

@@ -2,8 +2,7 @@ import win32com.client
 import logging
 from enum import Enum
 from typing import TypeAlias
-from utils import AscomDriverInfo
-from mastapi import Mastapi
+from utils import AscomDriverInfo, return_with_status
 
 logger = logging.getLogger('mast.unit.covers')
 
@@ -40,10 +39,23 @@ class Covers:
             logger.exception(ex)
             raise ex
 
-        for func in [self.shutdown, self.startup, self.open, self.close, self.status]:
-            Mastapi.api_method(func)
-
         logger.info('initialized')
+
+    def connect(self):
+        """
+        Connects to the ``MAST`` mirror cover controller
+        :mastapi:
+        :return:
+        """
+        self.connected = True
+
+    def disconnect(self):
+        """
+        Disconnects from the ``MAST`` mirror cover controller
+        :mastapi:
+        :return:
+        """
+        self.connected = False
 
     @property
     def connected(self):
@@ -70,18 +82,42 @@ class Covers:
         st.is_operational = self.connected and st.state == CoversState.Open
         return st
 
+    @return_with_status
     def open(self):
+        """
+        Starts opening the ``MAST`` mirror covers
+        :mastapi:
+        :return:
+        """
         logger.info('opening covers')
         self.ascom.OpenCover()
 
+    @return_with_status
     def close(self):
+        """
+        Starts closing the ``MAST`` mirror covers
+        :mastapi:
+        :return:
+        """
         logger.info('closing covers')
         self.ascom.CloseCover()
 
+    @return_with_status
     def startup(self):
+        """
+        Performs the ``startup`` procedure for the ``MAST`` mirror covers controller
+        :mastapi:
+        :return:
+        """
         if self.state() != CoversState.Open:
             self.open()
 
+    @return_with_status
     def shutdown(self):
+        """
+        Performs the ``shutdown`` procedure for the ``MAST`` mirror covers controller
+        :mastapi:
+        :return:
+        """
         if self.state() != CoversState.Closed:
             self.close()

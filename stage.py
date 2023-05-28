@@ -2,7 +2,7 @@
 import logging
 from enum import Enum, Flag
 import datetime
-from utils import RepeatTimer
+from utils import RepeatTimer,return_with_status
 from typing import TypeAlias
 from mastapi import Mastapi
 
@@ -59,9 +59,6 @@ class Stage(Mastapi):
         self.state = StageState.Idle
         self._connected = False
 
-        for func in [self.connect, self.disconnect, self.startup, self.shutdown, self.status, self.move]:
-            Mastapi.api_method(func)
-
         self.timer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'mast.stage'
         self.timer.start()
@@ -92,31 +89,39 @@ class Stage(Mastapi):
         self._connected = value
         logger.info(f'connected = {value}')
 
+    @return_with_status
     def connect(self):
         """
         Connects to the MAST stage controller
+        :mastapi:
         :return:
         """
         self.connected = True
 
+    @return_with_status
     def disconnect(self):
         """
         Disconnects from the MAST stage controller
+        :mastapi:
         :return:
         """
         self.connected = False
 
+    @return_with_status
     def startup(self):
         """
         Startup routine for the MAST stage.  Makes it operational
+        :mastapi:
         :return:
         """
         if self.state is not StageState.Operational:
             self.move(StageState.Operational)
 
+    @return_with_status
     def shutdown(self):
         """
         Shutdown routine for the MAST stage.  Makes it idle
+        :mastapi:
         :return:
         """
         self.move(StageState.Parked)
@@ -132,6 +137,7 @@ class Stage(Mastapi):
     def status(self) -> StageStatus:
         """
         Returns the status of the MAST stage
+        :mastapi:
         :return:
         """
         st = StageStatus()
@@ -162,7 +168,14 @@ class Stage(Mastapi):
             self.position = pos
             logger.info(f'ontimer: position={self.position}')
 
+    @return_with_status
     def move(self, where: StageState):
+        """
+        Starts moving the stage to one of two pre-defined positions
+        :mastapi:
+        :param where: Where to move the stage to (either StageState.In or StageState.Out)
+        :return:
+        """
         if not self.connected:
             raise 'Not connected'
 

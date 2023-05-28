@@ -24,11 +24,12 @@ def pw_status(request: Request):
 
 
 subsystems = {
-    'unit': unit,
-    'mount': unit.mount,
-    'power': unit.power,
-    'camera': unit.camera,
-    'stage': unit.stage,
+    'unit': {'obj': unit, 'name': 'unit'},
+    'mount': {'obj': unit.mount, 'name': 'unit.mount'},
+    'power': {'obj': unit.power, 'name': 'unit.power'},
+    'camera': {'obj': unit.camera, 'name': 'unit.camera'},
+    'stage': {'obj': unit.stage, 'name': 'unit.stage'},
+    'covers': {'obj': unit.covers, 'name': 'unit.covers'}
 }
 
 
@@ -36,7 +37,7 @@ subsystems = {
 def do_item(subsystem: str, method: str, request: Request):
 
     if subsystem in subsystems.keys():
-        subsystem_object = subsystems[subsystem]
+        subsystem_object = subsystems[subsystem]['obj']
     else:
         return f'Invalid MAST subsystem \"{subsystem}\", valid ones: {", ".join(subsystems.keys())}'
 
@@ -57,7 +58,8 @@ def do_item(subsystem: str, method: str, request: Request):
     if method not in api_method_names:
         return f'Invalid method "{method}" for subsystem {subsystem}, valid ones: {", ".join(api_method_names)}'
 
-    cmd = f'{subsystem}.{method}('
+    subsystem_name = subsystems[subsystem]['name']
+    cmd = f'{subsystem_name}.{method}('
     for k, v in request.query_params.items():
         cmd += f"{k}={v}, "
     cmd = cmd.removesuffix(', ') + ')'
