@@ -61,10 +61,6 @@ class Camera:
             logger.exception(ex)
             raise ex
 
-        # for member in inspect.getmembers(self):
-        #     if inspect.ismethod(member[1]):
-        #         print(f'method: {member[1]}')
-
         timer = RepeatTimer(2, function=self.ontimer)
         timer.name = 'mast.camera'
         timer.start()
@@ -166,8 +162,7 @@ class Camera:
 
     def ontimer(self):
         """
-        Called every 2 seconds by timer.
-        Checks if any ongoing activities have changed state
+        Called by timer, checks if any ongoing activities have changed state
         """
         if (self.activities & CameraActivities.Exposing) and self.ascom.ImageReady:
             self.activities &= ~CameraActivities.Exposing
@@ -179,7 +174,7 @@ class Camera:
             if temp <= self.operational_set_point:
                 self.activities &= ~CameraActivities.CoolingDown
                 self.activities &= ~CameraActivities.StartingUp
-                logger.info(f'cool-down done (temperature={temp:.1f}, set-point={self.operational_set_point})')
+                logger.info(f'cool-down: done (temperature={temp:.1f}, set-point={self.operational_set_point})')
 
         if self.activities & CameraActivities.WarmingUp:
             temp = self.ascom.CCDTemperature
