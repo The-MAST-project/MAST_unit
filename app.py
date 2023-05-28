@@ -70,6 +70,28 @@ def set_mast_openapi_schema():
                     }
                 }
 
+    for tup in inspect.getmembers(pw, inspect.ismethod):
+        name = tup[0]
+        if name == 'status' or \
+                name.startswith('mount_') or \
+                name.startswith('focuser_') or \
+                name.startswith('virtualcamera_'):
+            method = tup[1]
+            description = method.__doc__ if method.__doc__ is not None else None
+            path = f'/planewave/{name}'
+            openapi_schema['paths'][path] = {
+                'get': {
+                    'tags': ['planewave'],
+                    'description': description,
+                    'parameters': [],   # TBD
+                    'responses': {
+                        '200': {
+                            'description': 'OK'
+                        }
+                    }
+                }
+            }
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
