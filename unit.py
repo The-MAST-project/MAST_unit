@@ -7,7 +7,7 @@ import camera
 import covers
 import stage
 import mount
-import power
+from power import Power, PowerStatus
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -25,34 +25,28 @@ MAX_UNITS = 20
 
 class UnitStatus:
 
-    power: power.PowerStatus
+    power: PowerStatus
     camera: camera.CameraStatus
     stage: stage.StageStatus
     mount: mount.MountStatus
-    cover: covers.CoversStatus
+    covers: covers.CoversStatus
 
-    def __init__(self, u: UnitType):
-        if u.power is not None:
-            self.power = u.power.status()
-        if u.power.is_on('Camera') and u.camera is not None:
-            self.camera = u.camera.status()
-        if u.power.is_on('Stage') and u.stage is not None:
-            self.stage = u.stage.status()
-        if u.power.is_on('Cover') and u.covers is not None:
-            self.cover = u.covers.status()
-        if u.power.is_on('Mount') and u.mount is not None:
-            self.mount = u.mount.status()
+    def __init__(self, unit: UnitType):
+        self.power = Power.status()
+        self.camera = unit.camera.status() if unit.camera is not None else None
+        self.stage = unit.stage.status() if unit.stage is not None else None
+        self.covers = unit.covers.status() if unit.covers is not None else None
+        self.mount = unit.mount.status() if unit.mount is not None else None
 
         self.is_operational = \
-            (self.power is not None and self.power.is_operational) and \
             (self.mount is not None and self.mount.is_operational) and \
             (self.camera is not None and self.camera.is_operational) and \
-            (self.cover is not None and self.cover.is_operational) and \
+            (self.covers is not None and self.covers.is_operational) and \
             (self.stage is not None and self.stage.is_operational)
 
-        self.is_guiding = u.guiding
-        self.is_autofocusing = u.is_autofocusing
-        self.is_connected = u.connected
+        self.is_guiding = unit.guiding
+        self.is_autofocusing = unit.is_autofocusing
+        self.is_connected = unit.connected
         self.is_busy = self.is_autofocusing or self.is_guiding
 
 
@@ -67,7 +61,6 @@ class Unit:
     mount: mount
     covers: covers
     stage: stage
-    power: power
     pw: pwi4_client.PWI4
 
     def __init__(self, unit_id: int):
@@ -81,7 +74,6 @@ class Unit:
             self.covers = covers.Covers('ASCOM.PlaneWave.CoverCalibrator')
             self.mount = mount.Mount()
             self.stage = stage.Stage()
-            self.power = power.Power(self.id)
             logger.info('initialized')
         except Exception as ex:
             logger.exception(ex)
@@ -91,12 +83,11 @@ class Unit:
         """
         Starts the **MAST** _unit_ subsystems.  Makes it _operational_
         :mastapi:
-        :return:
         """
         if not self.connected:
             return
 
-        self.power.startup()
+        Power.startup()
 
         self.mount.connected = True
         self.camera.connected = True
@@ -107,17 +98,15 @@ class Unit:
         self.stage.startup()
         self.camera.startup()
         self.covers.startup()
-        # return self.pw.status()
 
     @return_with_status
     def shutdown(self):
         """
         Shuts the **MAST** _unit_ subsystems down.  Makes it _idle_
         :mastapi:
-        :return:
         """
         if not self.connected:
-            raise 'Not connected'
+            return
 
         self.mount.shutdown()
         self.covers.shutdown()
@@ -129,38 +118,24 @@ class Unit:
         self.stage.connected = False
         self.covers.connected = False
 
-        self.power.shutdown()
+        Power.shutdown()
 
     @property
     def connected(self):
-        self.reasons = []
         pw_status = self.pw.status()
-        if not pw_status.mount.is_connected:
-            self.reasons.append('Mount not connected')
-        if not self.camera.connected:
-            self.reasons.append('Camera not connected')
-        if not self.stage.connected:
-            self.reasons.append('Stage not connected')
-        if not self.covers.connected:
-            self.reasons.append('Covers not connected')
-
-        return True if len(self.reasons) == 0 else False
+        return pw_status.mount.is_connected and self.camera.connected and self.stage.connected and self.covers.connected
 
     @connected.setter
     def connected(self, value):
         """
         Should connect/disconnect anything that needs connecting/disconnecting
         :param value:
-        :return:
         """
 
-        self.power.connected = True
-        self.mount.connected = True
-        self.camera.connected = True
-        self.covers.connected = True
-        self.stage.connected = True
-        if not value == self._connected:
-            self._connected = value
+        self.mount.connected = value
+        self.camera.connected = value
+        self.covers.connected = value
+        self.stage.connected = value
 
     @return_with_status
     def connect(self):
@@ -176,7 +151,6 @@ class Unit:
         """
         Disconnects the **MAST** _unit_ subsystems from all its ancillaries.
         :mastapi:
-        :return:
         """
         self.connected = False
 
@@ -185,8 +159,10 @@ class Unit:
         """
         Starts the _autofocus_ routine (implemented by PlaneWave)
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         if self.pw.status().autofocus.is_running:
             logger.info("autofocus already running")
             return
@@ -198,8 +174,10 @@ class Unit:
         """
         Stops the _autofocus_ routine
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         if not self.pw.status().autofocus.is_running:
             logger.info("autofocus not running")
             return
@@ -212,6 +190,9 @@ class Unit:
         Returns the status of the _autofocus_ routine
         :return: ``True`` if _autofocus_ is active, ``False`` otherwise
         """
+        if not self.connected:
+            return False
+
         return self.pw.status().autofocus.is_running
 
     @return_with_status
@@ -219,8 +200,10 @@ class Unit:
         """
         Starts the _autoguide_ routine
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         self._is_guiding = True
 
     @return_with_status
@@ -228,18 +211,37 @@ class Unit:
         """
         Stops the _autoguide_ routine
         :mastapi:
-        :return:
         .. seealso:: start_guiding, is_guiding
         """
+        if not self.connected:
+            return
+
         if self._is_guiding:
             self._is_guiding = False
 
     def is_guiding(self) -> bool:
+        if not self.connected:
+            return False
+
         return self._is_guiding
 
     @property
     def guiding(self) -> bool:
         return self._is_guiding
+
+    @return_with_status
+    def power_on(self):
+        """
+        :mastapi:
+        """
+        Power.all_on()
+
+    @return_with_status
+    def power_off(self):
+        """
+        :mastapi:
+        """
+        Power.all_off()
 
     def status(self) -> UnitStatus:
         """
@@ -255,13 +257,12 @@ class Unit:
         Tests the plate solving routine
         :mastapi:
         :param exposure_seconds:
-        :return:
         """
         if not self.camera.connected:
-            raise Exception('Camera not connected')
+            return
 
         pw_stat = self.pw.request_with_status('/status')
-        if not pw_stat.mount.is_connected:
+        if self.mount.connected:
             raise Exception('Mount not connected')
         if not pw_stat.mount.is_tracking:
             raise Exception('Mount is not tracking')

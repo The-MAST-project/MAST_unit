@@ -36,16 +36,16 @@ class PWI4:
     def mount_disconnect(self):
         return self.request_with_status("/mount/disconnect")
 
-    def mount_enable(self, axisNum):
+    def mount_enable(self, axisNum: int):
         return self.request_with_status("/mount/enable", axis=axisNum)
 
-    def mount_disable(self, axisNum):
+    def mount_disable(self, axisNum: int):
         return self.request_with_status("/mount/disable", axis=axisNum)
 
-    def mount_set_slew_time_constant(self, value):
+    def mount_set_slew_time_constant(self, value: int):
         return self.request_with_status("/mount/set_slew_time_constant", value=value)
 
-    def mount_set_axis0_wrap_range_min(self, axis0_wrap_min_degs):
+    def mount_set_axis0_wrap_range_min(self, axis0_wrap_min_degs: float):
         # Added in PWI 4.0.13
         return self.request_with_status("/mount/set_axis0_wrap_range_min", degs=axis0_wrap_min_degs)
 
@@ -55,16 +55,16 @@ class PWI4:
     def mount_stop(self):
         return self.request_with_status("/mount/stop")
 
-    def mount_goto_ra_dec_apparent(self, ra_hours, dec_degs):
+    def mount_goto_ra_dec_apparent(self, ra_hours: float, dec_degs: float):
         return self.request_with_status("/mount/goto_ra_dec_apparent", ra_hours=ra_hours, dec_degs=dec_degs)
 
-    def mount_goto_ra_dec_j2000(self, ra_hours, dec_degs):
+    def mount_goto_ra_dec_j2000(self, ra_hours: float, dec_degs: float):
         return self.request_with_status("/mount/goto_ra_dec_j2000", ra_hours=ra_hours, dec_degs=dec_degs)
 
-    def mount_goto_alt_az(self, alt_degs, az_degs):
+    def mount_goto_alt_az(self, alt_degs: float, az_degs: float):
         return self.request_with_status("/mount/goto_alt_az", alt_degs=alt_degs, az_degs=az_degs)
 
-    def mount_goto_coord_pair(self, coord0, coord1, coord_type):
+    def mount_goto_coord_pair(self, coord0: float, coord1: float, coord_type: str):
         """
         Set the mount target to a pair of coordinates in a specified coordinate system.
         coord_type: can currently be "altaz" or "raw"
@@ -111,7 +111,7 @@ class PWI4:
 
         return self.request_with_status("/mount/offset", **kwargs)
 
-    def mount_spiral_offset_new(self, x_step_arcsec, y_step_arcsec):
+    def mount_spiral_offset_new(self, x_step_arcsec: float, y_step_arcsec: float):
         # Added in PWI 4.0.11 Beta 8
         return self.request_with_status("/mount/spiral_offset/new", x_step_arcsec=x_step_arcsec, y_step_arcsec=y_step_arcsec)
 
@@ -141,7 +141,7 @@ class PWI4:
     def mount_radecpath_new(self):
         return self.request_with_status("/mount/radecpath/new")
 
-    def mount_radecpath_add_point(self, jd, ra_j2000_hours, dec_j2000_degs):
+    def mount_radecpath_add_point(self, jd, ra_j2000_hours: float, dec_j2000_degs: float):
         return self.request_with_status("/mount/radecpath/add_point", jd=jd, ra_j2000_hours=ra_j2000_hours, dec_j2000_degs=dec_j2000_degs)
 
     def mount_radecpath_apply(self):
@@ -290,7 +290,7 @@ class PWI4:
     def focuser_disable(self):
         return self.request_with_status("/focuser/disable")
 
-    def focuser_goto(self, target):
+    def focuser_goto(self, target: int):
         return self.request_with_status("/focuser/goto", target=target)
 
     def focuser_stop(self):
@@ -336,7 +336,7 @@ class PWI4:
         """
         return self.request("/virtualcamera/take_image")
     
-    def virtualcamera_take_image_and_save(self, filename):
+    def virtualcamera_take_image_and_save(self, filename: str):
         """
         Request a fake FITS image from PWI4.
         Save the contents to the specified filename
@@ -374,7 +374,10 @@ class PWI4:
     ### Low-level methods for issuing requests ##################
 
     def request(self, command, **kwargs):
-        return self.comm.request(command, **kwargs)
+        try:
+            return self.comm.request(command, **kwargs)
+        except Exception as ex:
+            raise
 
     def request_with_status(self, command, **kwargs):
         response_text = self.request(command, **kwargs)
@@ -382,7 +385,7 @@ class PWI4:
     
     ### Status parsing utilities ################################
 
-    def status_text_to_dict(self, response):
+    def status_text_to_dict(self, response: str | bytes):
         """
         Given text with keyword=value pairs separated by newlines,
         return a dictionary with the equivalent contents.

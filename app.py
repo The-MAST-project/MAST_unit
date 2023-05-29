@@ -1,11 +1,11 @@
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.openapi.utils import get_openapi
 from PlaneWave import pwi4_client
 from unit import Unit
-from utils import init_log, PrettyJSONResponse, HelpResponse
+from utils import init_log, PrettyJSONResponse, HelpResponse, ResultWithStatus
 import inspect
 from mastapi import Mastapi
+from openapi import make_openapi_schema
 
 import logging
 
@@ -19,84 +19,18 @@ unit = Unit(unit_id)
 root = '/mast/api/v1/'
 
 
-@app.get(root + 'planewave/status', response_class=PrettyJSONResponse)
-def pw_status(request: Request):
-    return pw.status()
-
-
 subsystems = {
     'unit': {'obj': unit, 'name': 'unit'},
     'mount': {'obj': unit.mount, 'name': 'unit.mount'},
-    'power': {'obj': unit.power, 'name': 'unit.power'},
+    # 'power': {'obj': unit.power, 'name': 'unit.power'},
     'camera': {'obj': unit.camera, 'name': 'unit.camera'},
     'stage': {'obj': unit.stage, 'name': 'unit.stage'},
-    'covers': {'obj': unit.covers, 'name': 'unit.covers'}
+    'covers': {'obj': unit.covers, 'name': 'unit.covers'},
+    'planewave': {'obj': pw, 'name': 'planewave'}
 }
 
 
-def set_mast_openapi_schema():
-
-    openapi_schema = get_openapi(
-        title="Welcome to the mistery show!",
-        version="1.0",
-        description="This page allows you to explore the MAST Api",
-        routes=app.routes,
-    )
-
-    openapi_schema['servers'] = [{
-        'url': 'http://127.0.0.1:8000/mast/api/v1'
-    }]
-
-    openapi_schema['paths'] = dict()
-    for sub in subsystems.keys():
-        sub_path = '/' + subsystems[sub]['name'].replace('unit.', '')
-        sub_obj = subsystems[sub]['obj']
-        tuples = inspect.getmembers(sub_obj, inspect.ismethod)
-        for tup in tuples:
-            if Mastapi.is_api_method(tup[1]):
-                path = sub_path + '/' + tup[0]
-                method = tup[1]
-                description = method.__doc__ if method.__doc__ is not None else None
-                openapi_schema['paths'][path] = {
-                    'get': {
-                        'tags': [sub],
-                        'description': description,
-                        'parameters': [],   # TBD
-                        'responses': {
-                            '200': {
-                                'description': 'OK'
-                            }
-                        }
-                    }
-                }
-
-    for tup in inspect.getmembers(pw, inspect.ismethod):
-        name = tup[0]
-        if name == 'status' or \
-                name.startswith('mount_') or \
-                name.startswith('focuser_') or \
-                name.startswith('virtualcamera_'):
-            method = tup[1]
-            description = method.__doc__ if method.__doc__ is not None else None
-            path = f'/planewave/{name}'
-            openapi_schema['paths'][path] = {
-                'get': {
-                    'tags': ['planewave'],
-                    'description': description,
-                    'parameters': [],   # TBD
-                    'responses': {
-                        '200': {
-                            'description': 'OK'
-                        }
-                    }
-                }
-            }
-
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-
-set_mast_openapi_schema()
+make_openapi_schema(app=app, subsystems=subsystems)
 
 
 @app.get(root + '{subsystem}/{method}', response_class=PrettyJSONResponse)
@@ -129,7 +63,14 @@ def do_item(subsystem: str, method: str, request: Request):
     for k, v in request.query_params.items():
         cmd += f"{k}={v}, "
     cmd = cmd.removesuffix(', ') + ')'
+    # try:
     return eval(cmd)
+    # except Exception as ex:
+    #     ret = ResultWithStatus()
+    #     ret.status = None
+    #     ret.error = ex
+    #     ret.result = None
+    #     return ret
 
 
 if __name__ == "__main__":

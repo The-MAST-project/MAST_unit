@@ -4,6 +4,7 @@ import logging
 import astropy.units as u
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status
+from power import Power
 
 CameraType: TypeAlias = "Camera"
 
@@ -28,9 +29,17 @@ class CameraStatus:
 
     def __init__(self, c: CameraType):
         self.ascom = AscomDriverInfo(c.ascom)
-        self.temperature = c.ascom.CCDTemperature
-        self.cooler_power = c.ascom.CoolerPower
-        self.is_operational = abs(self.temperature - c.operational_set_point) <= 0.5
+        self.is_powered = c.is_powered
+        self.is_operational = False
+        if self.is_powered:
+            self.is_connected = c.connected
+            if self.is_connected:
+                self.temperature = c.ascom.CCDTemperature
+                self.is_operational = abs(self.temperature - c.operational_set_point) <= 0.5
+                self.cooler_power = c.ascom.CoolerPower
+        else:
+            self.is_operational = False
+            self.is_connected = False
         self.activities = c.activities
         self.activities_verbal = self.activities.name
 
@@ -75,6 +84,9 @@ class Camera:
 
     @connected.setter
     def connected(self, value: bool):
+        if not self.is_powered:
+            return
+
         if self.ascom is not None:
             self.ascom.connected = value
         if value:
@@ -86,31 +98,38 @@ class Camera:
             self.Yrad = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         logger.info(f'connected = {value}')
 
+    @property
+    def is_powered(self):
+        return Power.is_on('Camera')
+
     @return_with_status
     def connect(self):
-        self.connected = True
+        if self.is_powered:
+            self.connected = True
 
     @return_with_status
     def disconnect(self):
-        self.connected = False
+        if self.is_powered:
+            self.connected = False
 
     @return_with_status
     def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
-        if not self.connected:
-            raise "Not Connected"
+        if self.connected:
+            self.activities |= CameraActivities.Exposing
+            self.image = None
+            if not self.ascom.HasShutter:
+                shutter = False
 
-        self.activities |= CameraActivities.Exposing
-        self.image = None
-        if not self.ascom.HasShutter:
-            shutter = False
+            # readout mode, binning, gain?
 
-        # readout mode, binning, gain?
-
-        self.ascom.StartExposure(seconds, shutter)
-        logger.info(f'exposure started (seconds={seconds}, shutter={shutter})')
+            self.ascom.StartExposure(seconds, shutter)
+            logger.info(f'exposure started (seconds={seconds}, shutter={shutter})')
 
     @return_with_status
     def stop_exposure(self):
+        if not self.connected:
+            return
+
         if self.ascom.CanAbortExposure:
             try:
                 self.ascom.AbortExposure()
@@ -125,8 +144,9 @@ class Camera:
 
     @return_with_status
     def startup(self):
-        if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
-            self.cooldown()
+        if self.connected:
+            if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
+                self.cooldown()
 
     @return_with_status
     def cooldown(self):
@@ -145,12 +165,13 @@ class Camera:
 
     @return_with_status
     def shutdown(self):
-        if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
-            self.warmup()
+        if self.connected:
+            if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
+                self.warmup()
 
     @return_with_status
     def warmup(self):
-        if not self.ascom.Connected:
+        if not self.connected:
             return
 
         if self.ascom.CanSetCCDTemperature:
@@ -164,6 +185,9 @@ class Camera:
         """
         Called by timer, checks if any ongoing activities have changed state
         """
+        if not self.connected:
+            return
+
         if (self.activities & CameraActivities.Exposing) and self.ascom.ImageReady:
             self.activities &= ~CameraActivities.Exposing
             self.image = self.ascom.ImageArray

@@ -5,6 +5,7 @@ import datetime
 from utils import RepeatTimer,return_with_status
 from typing import TypeAlias
 from mastapi import Mastapi
+from power import Power
 
 logger = logging.getLogger('mast.unit.stage')
 
@@ -17,6 +18,8 @@ class StageActivities(Flag):
 
 
 class StageStatus:
+    is_powered: bool
+    is_connected: bool
     is_operational: bool
     position: int
     state: StageStateType
@@ -46,7 +49,7 @@ class Stage(Mastapi):
     TICKS_PER_SECOND = 1000
 
     _connected: bool
-    _position: int
+    _position: int = 0
     state: StageState
     default_initial_state: StageState = StageState.In
     ticks_at_start: int
@@ -66,11 +69,18 @@ class Stage(Mastapi):
         logger.info('initialized')
 
     @property
+    def is_powered(self):
+        return Power.is_on('Stage')
+
+    @property
     def connected(self) -> bool:
         return self._connected
 
     @connected.setter
     def connected(self, value):
+        if not self.is_powered:
+            return
+
         if value:
             try:
                 # connect to the controller
@@ -94,26 +104,28 @@ class Stage(Mastapi):
         """
         Connects to the MAST stage controller
         :mastapi:
-        :return:
         """
-        self.connected = True
+        if self.is_powered:
+            self.connected = True
 
     @return_with_status
     def disconnect(self):
         """
         Disconnects from the MAST stage controller
         :mastapi:
-        :return:
         """
-        self.connected = False
+        if self.is_powered:
+            self.connected = False
 
     @return_with_status
     def startup(self):
         """
         Startup routine for the MAST stage.  Makes it operational
         :mastapi:
-        :return:
         """
+        if not self.is_powered:
+            return
+
         if self.state is not StageState.Operational:
             self.move(StageState.Operational)
 
@@ -122,8 +134,10 @@ class Stage(Mastapi):
         """
         Shutdown routine for the MAST stage.  Makes it idle
         :mastapi:
-        :return:
         """
+        if not self.is_powered:
+            return
+
         self.move(StageState.Parked)
 
     @property
@@ -132,24 +146,35 @@ class Stage(Mastapi):
 
     @position.setter
     def position(self, value):
-        self._position = value
+        if self.connected:
+            self._position = value
 
     def status(self) -> StageStatus:
         """
         Returns the status of the MAST stage
         :mastapi:
-        :return:
         """
         st = StageStatus()
-        st.state = self.state
-        st.state_verbal = st.state.name
-        st.position = self.position
-        st.is_operational = st.state == StageState.Operational
-        st.activities = self.activities
-        st.activities_verbal = st.activities.name
+        st.is_powered = self.is_powered
+        if st.is_powered:
+            st.is_connected = self.connected
+            if st.is_connected:
+                st.state = self.state
+                st.is_operational = st.state == StageState.Operational
+                st.state_verbal = st.state.name
+                st.position = self.position
+                st.activities = self.activities
+                st.activities_verbal = st.activities.name
+        else:
+            st.is_powered = False
+            st.is_operational = False
+            st.is_connected = False
         return st
 
     def ontimer(self):
+        if not self.connected:
+            return
+
         if self.state == StageState.MovingIn or self.state == StageState.MovingOut:
             dt = (datetime.datetime.now() - self.motion_start_time).seconds
             if self.state == StageState.MovingOut:
@@ -174,10 +199,9 @@ class Stage(Mastapi):
         Starts moving the stage to one of two pre-defined positions
         :mastapi:
         :param where: Where to move the stage to (either StageState.In or StageState.Out)
-        :return:
         """
         if not self.connected:
-            raise 'Not connected'
+            return
 
         if self.state == where:
             logger.info(f'move: already {where}')

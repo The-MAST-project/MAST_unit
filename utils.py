@@ -163,7 +163,6 @@ def return_with_status(func):
     * error: Any exception that may have been raised
     * status: The product of this class' status() method
     :param func:
-    :return:
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs) -> ResultWithStatus:

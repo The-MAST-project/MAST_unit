@@ -3,6 +3,7 @@ import logging
 from enum import Enum
 from typing import TypeAlias
 from utils import AscomDriverInfo, return_with_status
+from power import Power
 
 logger = logging.getLogger('mast.unit.covers')
 
@@ -10,10 +11,11 @@ CoversStateType: TypeAlias = "CoversState"
 
 
 class CoversStatus:
+    is_powered: bool
     is_connected: bool
+    is_operational: bool
     state: CoversStateType
     state_verbal: str
-    is_operational: bool
 
 
 class CoversState(Enum):
@@ -31,6 +33,7 @@ class Covers:
     """
 
     ascom = None
+    _connected: bool = False
 
     def __init__(self, driver: str):
         try:
@@ -41,45 +44,53 @@ class Covers:
 
         logger.info('initialized')
 
+    @property
+    def is_powered(self):
+        return Power.is_on('Covers')
+
     def connect(self):
         """
         Connects to the ``MAST`` mirror cover controller
         :mastapi:
-        :return:
         """
-        self.connected = True
+        if self.is_powered:
+            self.connected = True
 
     def disconnect(self):
         """
         Disconnects from the ``MAST`` mirror cover controller
         :mastapi:
-        :return:
         """
-        self.connected = False
+        if self.is_powered:
+            self.connected = False
 
     @property
     def connected(self):
-        return self.ascom.connected
+        return self._connected
 
     @connected.setter
     def connected(self, value):
-        try:
-            self.ascom.connected = value
-            logger.info(f'connected = {value}')
-        except Exception as ex:
-            logger.exception(ex)
-            raise ex
+        self._connected = value
 
     def state(self) -> CoversState:
         return CoversState(self.ascom.CoverState)
 
     def status(self) -> CoversStatus:
+        """
+        :mastapi:
+        """
         st = CoversStatus()
         st.ascom = AscomDriverInfo(self.ascom)
-        st.state = self.state()
-        st.state_verbal = st.state.name
-        st.is_connected = self.connected
-        st.is_operational = self.connected and st.state == CoversState.Open
+        st.is_powered = self.is_powered
+        if self.is_powered:
+            st.is_connected = self.connected
+            if st.is_connected:
+                st.is_operational = st.state == CoversState.Open
+                st.state = self.state()
+                st.state_verbal = st.state.name
+        else:
+            st.is_connected = False
+            st.is_operational = False
         return st
 
     @return_with_status
@@ -87,8 +98,10 @@ class Covers:
         """
         Starts opening the ``MAST`` mirror covers
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         logger.info('opening covers')
         self.ascom.OpenCover()
 
@@ -97,8 +110,10 @@ class Covers:
         """
         Starts closing the ``MAST`` mirror covers
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         logger.info('closing covers')
         self.ascom.CloseCover()
 
@@ -107,8 +122,10 @@ class Covers:
         """
         Performs the ``startup`` procedure for the ``MAST`` mirror covers controller
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         if self.state() != CoversState.Open:
             self.open()
 
@@ -117,7 +134,9 @@ class Covers:
         """
         Performs the ``shutdown`` procedure for the ``MAST`` mirror covers controller
         :mastapi:
-        :return:
         """
+        if not self.connected:
+            return
+
         if self.state() != CoversState.Closed:
             self.close()

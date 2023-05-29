@@ -40,82 +40,80 @@ class PowerStatus:
     sockets: list
     is_operational: bool = True
 
-    def __init__(self, p: PowerType):
+    def __init__(self):
         self.sockets = []
-        for index, socket in enumerate(p.sockets):
+        for index, socket in enumerate(sockets):
             self.sockets.append(SocketStatus(name=socket.name, state=socket.state))
             if socket.state != PowerState.On:
                 self.is_operational = False
 
 
+sockets: list[Socket] = [
+    Socket(name='Mount', state=PowerState.Off),
+    Socket(name='Camera', state=PowerState.Off),
+    Socket(name='Stage', state=PowerState.Off),
+    Socket(name='Covers', state=PowerState.Off)
+    ]
+ip_address: str = ''
+
+
 class Power:
 
-    ip_address: str
-    id: int
-    sockets: list[Socket]
-
-    def __init__(self, _id):
-        self.id = _id
-        self.sockets = list()
-        self.sockets.append(Socket(name='Mount', state=PowerState.Off))
-        self.sockets.append(Socket(name='Camera', state=PowerState.Off))
-        self.sockets.append(Socket(name='Stage', state=PowerState.Off))
-        self.sockets.append(Socket(name='Cover', state=PowerState.Off))
-
-    @property
-    def connected(self):
-        # get the real number of sockets, names and states
-        return True
-
-    @connected.setter
-    def connected(self, value):
-        pass
-
     @return_with_status
-    def connect(self):
-        self.connected = True
-
-    @return_with_status
-    def disconnect(self):
-        self.connected = False
-
-    def name2id(self, name: str) -> int:
-        for index, socket in enumerate(self.sockets):
-            if name == socket.name:
-                return index
-        return -1
-
-    @return_with_status
-    def power(self, which_socket: int | str, wanted_state: PowerState):
+    @staticmethod
+    def power(which_socket: int | str, wanted_state: PowerState):
         if isinstance(which_socket, str):
-            which_socket = self.name2id(which_socket)
-        self.validate(which_socket)
-        self.sockets[which_socket].state = wanted_state
+            which_socket = name2id(which_socket)
+        validate(which_socket)
+        sockets[which_socket].state = wanted_state
 
-    def state(self, which_socket: int | str) -> PowerState:
+    @staticmethod
+    def state(which_socket: int | str) -> PowerState:
         if isinstance(which_socket, str):
-            which_socket = self.name2id(which_socket)
-        self.validate(which_socket)
-        return self.sockets[which_socket].state
+            which_socket = name2id(which_socket)
+        validate(which_socket)
+        return sockets[which_socket].state
 
-    def validate(self, socket_id: int):
-        if socket_id < 0 or socket_id > len(self.sockets):
-            raise f'Invalid socket_id={socket_id}.  Must be [0..{len(self.sockets)}]'
-
-    @return_with_status
-    def startup(self):
-        for index, socket in enumerate(self.sockets):
-            self.power(index, PowerState.On)
+    # @return_with_status
+    @staticmethod
+    def startup():
+        for index, socket in enumerate(sockets):
+            Power.power(index, PowerState.On)
             time.sleep(2)
 
-    @return_with_status
-    def shutdown(self):
-        for index, socket in enumerate(self.sockets):
-            self.power(index, PowerState.Off)
+    # @return_with_status
+    @staticmethod
+    def shutdown():
+        for index, socket in enumerate(sockets):
+            Power.power(index, PowerState.Off)
             time.sleep(2)
 
-    def status(self):
-        return PowerStatus(self)
+    @staticmethod
+    def status():
+        return PowerStatus()
 
-    def is_on(self, which_socket: int | str) -> bool:
-        return self.state(which_socket) == PowerState.On
+    @staticmethod
+    def is_on(which_socket: int | str) -> bool:
+        return Power.state(which_socket) == PowerState.On
+
+    @staticmethod
+    def all_on():
+        for i in range(len(sockets)):
+            Power.power(i, PowerState.On)
+
+    @staticmethod
+    def all_off():
+        for i in range(len(sockets)):
+            Power.power(i, PowerState.Off)
+
+
+def validate(socket_id: int):
+    if socket_id < 0 or socket_id > len(sockets):
+        raise f'Invalid socket_id={socket_id}.  Must be [0..{len(sockets)}]'
+
+
+def name2id(name: str) -> int:
+    for index, socket in enumerate(sockets):
+        if name == socket.name:
+            return index
+    return -1
