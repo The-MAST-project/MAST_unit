@@ -35,7 +35,7 @@ class Activities:
         logger.info(f'activity {activity.name} - ended')
 
     def is_active(self, activity: Flag) -> bool:
-        return not (self.activities & activity) == 0
+        return activity in self.activities
 
 
 class AscomDriverInfo:
@@ -89,10 +89,10 @@ class DailyFileHandler(logging.FileHandler):
             top = '/var/log/mast'
         elif platform.platform().startswith('Windows'):
             top = os.path.join(os.path.expandvars('%LOCALAPPDATA%'), 'mast')
-        utcnow = datetime.datetime.utcnow()
-        if utcnow.hour < 12:
-            utcnow = utcnow - datetime.timedelta(days=1)
-        return os.path.join(top, f'{utcnow:%Y-%m-%d}', self.path)
+        now = datetime.datetime.now()
+        if now.hour < 12:
+            now = now - datetime.timedelta(days=1)
+        return os.path.join(top, f'{now:%Y-%m-%d}', self.path)
 
     def emit(self, record: logging.LogRecord):
         """
@@ -147,6 +147,11 @@ def is_mastapi(func):
     return func.__doc__.contains(':mastapi:')
 
 
+def quote(s: str):
+    # return 'abc'
+    return "'" + s.replace("'", "\\'") + "'"
+
+
 class ResultWithStatus:
     """
     Encapsulates the result of a ``MAST`` API call
@@ -190,9 +195,19 @@ def return_with_status(func):
 
 class HelpResponse:
     method: str
-    help: str
+    description: str
 
     def __init__(self, method: str, doc: str):
         self.method = method
-        self.help = doc
+        self.description = doc
 
+
+class Subsystem:
+    path: str
+    obj: object
+    obj_name: str
+
+    def __init__(self, path: str, obj: object, obj_name: str):
+        self.path = path
+        self.obj = obj
+        self.obj_name = obj_name

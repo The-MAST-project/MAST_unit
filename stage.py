@@ -2,10 +2,10 @@
 import logging
 from enum import Enum, Flag
 import datetime
-from utils import RepeatTimer,return_with_status
+from utils import RepeatTimer, return_with_status, Activities
 from typing import TypeAlias
 from mastapi import Mastapi
-from power import Power
+from power import Power, PowerState
 
 logger = logging.getLogger('mast.unit.stage')
 
@@ -14,7 +14,9 @@ StageStateType: TypeAlias = "StageState"
 
 class StageActivities(Flag):
     Idle = 0
-    Moving = (1 << 1)
+    Moving = (1 << 0)
+    StaringUp = (1 << 1)
+    ShuttingDown = (1 << 2)
 
 
 class StageStatus:
@@ -27,6 +29,7 @@ class StageStatus:
     activities: StageActivities
     activities_verbal: str
     api_methods: list
+    not_operational_because: list[str]
 
 
 class StageState(Enum):
@@ -40,7 +43,7 @@ class StageState(Enum):
     Parked = Out
 
 
-class Stage(Mastapi):
+class Stage(Mastapi, Activities):
 
     MIN_TICKS = 0
     MAX_TICKS = 50000
@@ -120,13 +123,18 @@ class Stage(Mastapi):
     @return_with_status
     def startup(self):
         """
-        Startup routine for the MAST stage.  Makes it operational
+        Startup routine for the MAST stage.  Makes it operational:
+        * If not powered, powers it ON
+        * If not connected, connects to the controller
+        * If the stage is not at operational position, it is moved
         :mastapi:
         """
         if not self.is_powered:
-            return
-
+            Power.power('Stage', PowerState.On)
+        if not self.connected:
+            self.connect()
         if self.state is not StageState.Operational:
+            self.start_activity(StageActivities.StaringUp)
             self.move(StageState.Operational)
 
     @return_with_status
@@ -138,7 +146,11 @@ class Stage(Mastapi):
         if not self.is_powered:
             return
 
-        self.move(StageState.Parked)
+        if not self.state == StageState.Parked:
+            self.start_activity(StageActivities.ShuttingDown)
+            self.move(StageState.Parked)
+        self.disconnect()
+        Power.power('Stage', PowerState.Off)
 
     @property
     def position(self) -> int:
@@ -155,46 +167,57 @@ class Stage(Mastapi):
         :mastapi:
         """
         st = StageStatus()
+        st.not_operational_because = list()
         st.is_powered = self.is_powered
         if st.is_powered:
             st.is_connected = self.connected
             if st.is_connected:
                 st.state = self.state
                 st.is_operational = st.state == StageState.Operational
+                if not st.is_operational:
+                    st.not_operational_because.append(f'state is {st.state} instead of {StageState.Operational}')
                 st.state_verbal = st.state.name
                 st.position = self.position
                 st.activities = self.activities
                 st.activities_verbal = st.activities.name
+            else:
+                st.not_operational_because.append('not-connected')
         else:
             st.is_powered = False
             st.is_operational = False
             st.is_connected = False
+            st.not_operational_because.append('not-powered')
+            st.not_operational_because.append('not-connected')
         return st
 
     def ontimer(self):
         if not self.connected:
             return
 
-        if self.state == StageState.MovingIn or self.state == StageState.MovingOut:
+        if self.is_active(StageActivities.Moving):
             dt = (datetime.datetime.now() - self.motion_start_time).seconds
             if self.state == StageState.MovingOut:
                 pos = self.ticks_at_start + dt * self.TICKS_PER_SECOND
                 if pos > self.TICKS_WHEN_OUT:
                     pos = self.TICKS_WHEN_OUT
                     self.state = StageState.Out
-                    self.activities &= ~StageActivities.Moving
+                    self.end_activity(StageActivities.Moving, logger)
             else:
                 pos = self.ticks_at_start - dt * self.TICKS_PER_SECOND
                 if pos <= self.TICKS_WHEN_IN:
                     pos = self.TICKS_WHEN_IN
                     self.state = StageState.In
-                    self.activities &= ~StageActivities.Moving
+                    self.end_activity(StageActivities.Moving, logger)
 
             self.position = pos
+            if self.is_active(StageActivities.StaringUp) and self.state == StageState.In:
+                self.end_activity(StageActivities.StaringUp, logger)
+            if self.is_active(StageActivities.ShuttingDown) and self.state == StageState.Out:
+                self.end_activity(StageActivities.ShuttingDown, logger)
             logger.info(f'ontimer: position={self.position}')
 
     @return_with_status
-    def move(self, where: StageState):
+    def move(self, where: StageState | str):
         """
         Starts moving the stage to one of two pre-defined positions
         :mastapi:
@@ -203,11 +226,13 @@ class Stage(Mastapi):
         if not self.connected:
             return
 
+        if isinstance(where, str):
+            where = StageState(where)
         if self.state == where:
             logger.info(f'move: already {where}')
             return
 
-        self.activities |= StageActivities.Moving
+        self.start_activity(StageActivities.Moving, logger)
         self.state = StageState.MovingIn if where == StageState.In else StageState.MovingOut
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()

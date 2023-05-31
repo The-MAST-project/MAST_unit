@@ -14,6 +14,8 @@ class PowerState(Enum):
     Off = 0
     On = 1
     Unknown = 2
+    AllOn = 3
+    AllOff = 4
 
 
 class Socket:
@@ -39,20 +41,24 @@ class SocketStatus:
 class PowerStatus:
     sockets: list
     is_operational: bool = True
+    not_operational_because: list[str]
 
     def __init__(self):
         self.sockets = []
+        self.not_operational_because = list()
         for index, socket in enumerate(sockets):
             self.sockets.append(SocketStatus(name=socket.name, state=socket.state))
             if socket.state != PowerState.On:
                 self.is_operational = False
+                self.not_operational_because.append(f'socket[{socket.name}] is OFF' )
 
 
 sockets: list[Socket] = [
     Socket(name='Mount', state=PowerState.Off),
     Socket(name='Camera', state=PowerState.Off),
     Socket(name='Stage', state=PowerState.Off),
-    Socket(name='Covers', state=PowerState.Off)
+    Socket(name='Covers', state=PowerState.Off),
+    Socket(name='Focuser', state=PowerState.Off)
     ]
 ip_address: str = ''
 
@@ -61,11 +67,16 @@ class Power:
 
     @return_with_status
     @staticmethod
-    def power(which_socket: int | str, wanted_state: PowerState):
+    def power(which_socket: int | str, wanted_state: PowerState | str):
         if isinstance(which_socket, str):
             which_socket = name2id(which_socket)
+        if isinstance(wanted_state, str):
+            wanted_state = PowerState(wanted_state)
+
         validate(which_socket)
         sockets[which_socket].state = wanted_state
+        logger.info(f'Turned socket[{sockets[which_socket].name}] to {wanted_state}')
+        time.sleep(2)
 
     @staticmethod
     def state(which_socket: int | str) -> PowerState:
@@ -77,16 +88,12 @@ class Power:
     # @return_with_status
     @staticmethod
     def startup():
-        for index, socket in enumerate(sockets):
-            Power.power(index, PowerState.On)
-            time.sleep(2)
+        pass
 
     # @return_with_status
     @staticmethod
     def shutdown():
-        for index, socket in enumerate(sockets):
-            Power.power(index, PowerState.Off)
-            time.sleep(2)
+        pass
 
     @staticmethod
     def status():

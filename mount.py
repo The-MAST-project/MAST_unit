@@ -6,7 +6,7 @@ from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
 from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status
-from power import Power
+from power import Power, PowerState
 
 logger = logging.getLogger('mast.unit.mount')
 
@@ -15,26 +15,33 @@ MountType: TypeAlias = "Mount"
 
 class MountActivity(Flag):
     Idle = 0
-    StartingUp = (1 << 1)
-    ShuttingDown = (1 << 2)
-    Slewing = (1 << 3)
-    Parking = (1 << 4)
-    Tracking = (1 << 5)
-    FindingHome = (1 << 6)
+    StartingUp =(1 << 0)
+    ShuttingDown = (1 << 1)
+    Slewing = (1 <<2)
+    Parking = (1 << 3)
+    Tracking = (1 << 4)
+    FindingHome = (1 << 5)
 
 
 class MountStatus:
 
     def __init__(self, m: MountType):
         self.ascom = AscomDriverInfo(m.ascom)
+        self.not_operational_because = list()
         st = m.pw.status()
         self.is_powered = m.is_powered
         if self.is_powered:
             self.is_connected = m.connected
+            self.is_operational = False
             if self.is_connected:
                 self.is_operational = \
                     st.mount.axis0.is_enabled and \
                     st.mount.axis1.is_enabled
+                if not self.is_operational:
+                    reason = f'one of the axes is not enabled: ' + \
+                        f'axis0={"enabled" if st.mount.axis0.is_enabled else "disabled"} ' + \
+                        f'axis1={"enabled" if st.mount.axis1.is_enabled else "disabled"} '
+                    self.not_operational_because.append(reason)
                 self.is_tracking = st.mount.is_tracking
                 self.is_slewing = st.mount.is_slewing
                 self.ra_j2000_hours = st.mount.ra_j2000_hours
@@ -45,9 +52,13 @@ class MountStatus:
                     self.activities |= MountActivity.Tracking
                 if self.is_slewing:
                     self.activities |= MountActivity.Slewing
+            else:
+                self.not_operational_because.append('not-connected')
         else:
             self.is_operational = False
             self.is_connected = False
+            self.not_operational_because.append('not-powered')
+            self.not_operational_because.append('not-connected')
 
 
 class Mount(Activities):
@@ -83,7 +94,7 @@ class Mount(Activities):
     @property
     def connected(self) -> bool:
         st = self.pw.status()
-        return st.mount.is_connected and st.mount.axis0.is_enabled and st.mount.axis1.is_enabled
+        return self.ascom and self.ascom.Connected and st.mount.is_connected and st.mount.axis0.is_enabled and st.mount.axis1.is_enabled
 
     @connected.setter
     def connected(self, value):
@@ -93,6 +104,8 @@ class Mount(Activities):
         st = self.pw.status()
         try:
             if value:
+                if not self.ascom.Connected:
+                    self.ascom.Connected = True
                 if not st.mount.is_connected:
                     self.pw.mount_connect()
                 if not st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
@@ -104,25 +117,28 @@ class Mount(Activities):
                     st.pw.mount_disable()
                 st.pw.mount_disconnect()
                 self.pw.request('/fans/off')
+                self.ascom.Connected = False
                 logger.info(f'connected = {value}, axes disabled, disconnected, fans off')
         except Exception as ex:
             logger.exception(ex)
 
     @return_with_status
     def startup(self):
-        if self.connected:
-            self.start_activity(MountActivity.StartingUp, logger)
-            self.pw.request('/fans/on')
-            self.find_home()
-            self.end_activity(MountActivity.StartingUp, logger)
+        if not self.is_powered:
+            Power.power('Mount', PowerState.On)
+        if not self.connected:
+            self.connect()
+        self.start_activity(MountActivity.StartingUp, logger)
+        self.pw.request('/fans/on')
+        self.find_home()
 
     @return_with_status
     def shutdown(self):
-        if self.connected:
-            self.start_activity(MountActivity.ShuttingDown, logger)
-            self.pw.request('/fans/off')
-            self.park()
-            self.end_activity(MountActivity.ShuttingDown, logger)
+        if not self.connected:
+            self.connect()
+        self.start_activity(MountActivity.ShuttingDown, logger)
+        self.pw.request('/fans/off')
+        self.park()
 
     @return_with_status
     def park(self):
@@ -141,24 +157,18 @@ class Mount(Activities):
         if not self.connected:
             return
 
-        if self.is_active(MountActivity.FindingHome) and self.ascom.Connected:
-            status = self.pw.status()
-            delta_axis0_position_degrees = status.mount.axis0.position_degs - self.last_axis0_position_degrees
-            delta_axis1_position_degrees = status.mount.axis1.position_degs - self.last_axis1_position_degrees
-
-            self.last_axis0_position_degrees = status.mount.axis0.position_degs
-            self.last_axis1_position_degrees = status.mount.axis1.position_degs
-
-            if abs(delta_axis0_position_degrees) < 0.001 and abs(delta_axis1_position_degrees) < 0.001:
+        status = self.pw.status()
+        if self.is_active(MountActivity.FindingHome):
+            if not status.mount.is_slewing:
                 self.end_activity(MountActivity.FindingHome, logger)
-                self.last_axis0_position_degrees = -99999
-                self.last_axis1_position_degrees = -99999
+                if self.is_active(MountActivity.StartingUp):
+                    self.end_activity(MountActivity.StartingUp, logger)
 
-        if self.is_active(MountActivity.Parking) and self.ascom.Connected:
-            parking_ra = self.ascom.SiderealTime
-            parking_dec = self.ascom.SiteLatitude
-            if abs(self.ascom.RightAscension - parking_ra) <= 0.1 and abs(self.ascom.Declination - parking_dec) < 0.1:
+        if self.is_active(MountActivity.Parking):
+            if not status.mount.is_slewing:
                 self.end_activity(MountActivity.Parking, logger)
+                if self.is_active(MountActivity.ShuttingDown):
+                    self.end_activity(MountActivity.ShuttingDown, logger)
 
     def status(self) -> MountStatus:
         """

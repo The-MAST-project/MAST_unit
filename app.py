@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from PlaneWave import pwi4_client
 from unit import Unit
-from utils import init_log, PrettyJSONResponse, HelpResponse, ResultWithStatus
+from utils import init_log, PrettyJSONResponse, HelpResponse, quote, Subsystem
 import inspect
 from mastapi import Mastapi
 from openapi import make_openapi_schema
@@ -19,16 +19,15 @@ unit = Unit(unit_id)
 root = '/mast/api/v1/'
 
 
-subsystems = {
-    'unit': {'obj': unit, 'name': 'unit'},
-    'mount': {'obj': unit.mount, 'name': 'unit.mount'},
-    # 'power': {'obj': unit.power, 'name': 'unit.power'},
-    'camera': {'obj': unit.camera, 'name': 'unit.camera'},
-    'stage': {'obj': unit.stage, 'name': 'unit.stage'},
-    'covers': {'obj': unit.covers, 'name': 'unit.covers'},
-    'planewave': {'obj': pw, 'name': 'planewave'}
-}
-
+subsystems = [
+    Subsystem(path='unit', obj=unit, obj_name='unit'),
+    Subsystem(path='mount', obj=unit.mount, obj_name='unit.mount'),
+    Subsystem(path='focuser', obj=unit.focuser, obj_name='unit.focuser'),
+    Subsystem(path='camera', obj=unit.camera, obj_name='unit.camera'),
+    Subsystem(path='stage', obj=unit.stage, obj_name='unit.stage'),
+    Subsystem(path='covers', obj=unit.covers, obj_name='unit.covers'),
+    Subsystem(path='planewave', obj=pw, obj_name='pw')
+]
 
 make_openapi_schema(app=app, subsystems=subsystems)
 
@@ -36,32 +35,36 @@ make_openapi_schema(app=app, subsystems=subsystems)
 @app.get(root + '{subsystem}/{method}', response_class=PrettyJSONResponse)
 def do_item(subsystem: str, method: str, request: Request):
 
-    if subsystem in subsystems.keys():
-        subsystem_object = subsystems[subsystem]['obj']
-    else:
-        return f'Invalid MAST subsystem \"{subsystem}\", valid ones: {", ".join(subsystems.keys())}'
+    sub = [s for s in subsystems if s.path == subsystem]
+    if len(sub) == 0:
+        return f'Invalid MAST subsystem \"{subsystem}\", valid ones: {", ".join([x.path for x in subsystems])}'
 
-    api_methods = list()
+    sub = sub[0]
+    # api_methods = list()
     api_method_names = list()
-    tuples = inspect.getmembers(subsystem_object, inspect.ismethod)
-    for tup in tuples:
-        if Mastapi.is_api_method(tup[1]):
-            api_method_names.append(tup[0])
-            api_methods.append(tup[1])
+    # inspect.getmembers returns (name, object) all_method_tuples
+    all_method_tuples = inspect.getmembers(sub.obj, inspect.ismethod)
+    api_method_tuples = [t for t in all_method_tuples if Mastapi.is_api_method(t[1])]
+    # for tup in all_method_tuples:
+    #     if Mastapi.is_api_method(tup[1]):
+    #         api_method_names.append(tup[0])
+    #         api_methods.append(tup[1])
+    api_method_names = [t[0] for t in api_method_tuples]
+    api_method_objects = [t[1] for t in api_method_tuples]
 
     if method == 'help':
         responses = list()
-        for i in range(len(api_methods)):
-            responses.append(HelpResponse(api_method_names[i], api_methods[i].__doc__))
+        for i, obj in enumerate(api_method_objects):
+            responses.append(HelpResponse(api_method_names[i],
+                                          api_method_objects[i].__doc__.replace(':mastapi:\n', '').lstrip('\n').strip()))
         return responses
 
     if method not in api_method_names:
         return f'Invalid method "{method}" for subsystem {subsystem}, valid ones: {", ".join(api_method_names)}'
 
-    subsystem_name = subsystems[subsystem]['name']
-    cmd = f'{subsystem_name}.{method}('
+    cmd = f'{sub.obj_name}.{method}('
     for k, v in request.query_params.items():
-        cmd += f"{k}={v}, "
+        cmd += f"{k}={quote(v)}, "
     cmd = cmd.removesuffix(', ') + ')'
     # try:
     return eval(cmd)

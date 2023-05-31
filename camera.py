@@ -4,7 +4,8 @@ import logging
 import astropy.units as u
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status
-from power import Power
+from power import Power, PowerState
+from utils import Activities
 
 CameraType: TypeAlias = "Camera"
 
@@ -13,11 +14,11 @@ logger = logging.getLogger('mast.unit.camera')
 
 class CameraActivities(Flag):
     Idle = 0
-    CoolingDown = (1 << 1)
-    WarmingUp = (1 << 2)
-    Exposing = (1 << 3)
-    ShuttingDown = (1 << 4)
-    StartingUp = (1 << 5)
+    CoolingDown = (1 << 0)
+    WarmingUp = (1 << 1)
+    Exposing = (1 << 2)
+    ShuttingDown = (1 << 3)
+    StartingUp = (1 << 4)
 
 
 class CameraStatus:
@@ -26,25 +27,34 @@ class CameraStatus:
     is_operational: bool
     temperature: float
     cooler_power: float # percent
+    not_operational_because: list[str]
 
     def __init__(self, c: CameraType):
         self.ascom = AscomDriverInfo(c.ascom)
+        self.not_operational_because = list()
         self.is_powered = c.is_powered
         self.is_operational = False
         if self.is_powered:
             self.is_connected = c.connected
             if self.is_connected:
+                set_point = c.operational_set_point
                 self.temperature = c.ascom.CCDTemperature
-                self.is_operational = abs(self.temperature - c.operational_set_point) <= 0.5
+                self.is_operational = abs(self.temperature - set_point) <= 0.5
+                if not self.is_operational:
+                    self.not_operational_because.append(f'temperature: abs({self.temperature} - {set_point}) > 0.5 deg')
                 self.cooler_power = c.ascom.CoolerPower
+            else:
+                self.not_operational_because.append('not-connected')
         else:
             self.is_operational = False
             self.is_connected = False
+            self.not_operational_because.append('not-powered')
+            self.not_operational_because.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
 
 
-class Camera:
+class Camera(Activities):
 
     _connected: bool = False
     _is_exposing: bool = False
@@ -70,17 +80,14 @@ class Camera:
             logger.exception(ex)
             raise ex
 
-        timer = RepeatTimer(2, function=self.ontimer)
-        timer.name = 'mast.camera'
-        timer.start()
+        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.timer.name = 'camera-timer'
+        self.timer.start()
         logger.info('initialized')
 
     @property
     def connected(self) -> bool:
-        if self.ascom is not None:
-            return self.ascom.connected
-        else:
-            return False
+        return self.ascom and self.ascom.Connected
 
     @connected.setter
     def connected(self, value: bool):
@@ -115,7 +122,7 @@ class Camera:
     @return_with_status
     def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
         if self.connected:
-            self.activities |= CameraActivities.Exposing
+            self.start_activity(CameraActivities.Exposing, logger)
             self.image = None
             if not self.ascom.HasShutter:
                 shutter = False
@@ -137,13 +144,17 @@ class Camera:
                 logger .exception(f'failed to stop exposure', ex)
         else:
             logger.info(f'ASCOM camera "{self.ascom.Name}" cannot stop exposure')
-        self.activities &= ~CameraActivities.Exposing
+        self.end_activity(CameraActivities.Exposing, logger)
 
     def status(self) -> CameraStatus:
         return CameraStatus(self)
 
     @return_with_status
     def startup(self):
+        if not self.is_powered:
+            Power.power('Camera', PowerState.On)
+        if not self.connected:
+            self.connect()
         if self.connected:
             if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
                 self.cooldown()
@@ -153,7 +164,7 @@ class Camera:
         if not self.ascom.Connected:
             return
 
-        self.activities |= CameraActivities.CoolingDown
+        self.start_activity(CameraActivities.CoolingDown, logger)
         # Turn on cooler
         if not self.ascom.CoolerOn:
             logger.info(f'cool-down: cooler ON')
@@ -166,6 +177,7 @@ class Camera:
     @return_with_status
     def shutdown(self):
         if self.connected:
+            self.start_activity(CameraActivities.ShuttingDown, logger)
             if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
                 self.warmup()
 
@@ -175,7 +187,7 @@ class Camera:
             return
 
         if self.ascom.CanSetCCDTemperature:
-            self.activities |= CameraActivities.WarmingUp
+            self.start_activity(CameraActivities.WarmingUp, logger)
             temp = self.ascom.CCDTemperature
 
             logger.info(f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
@@ -188,22 +200,23 @@ class Camera:
         if not self.connected:
             return
 
-        if (self.activities & CameraActivities.Exposing) and self.ascom.ImageReady:
-            self.activities &= ~CameraActivities.Exposing
+        if self.is_active(CameraActivities.Exposing) and self.ascom.ImageReady:
+            self.end_activity(CameraActivities.Exposing, logger)
             self.image = self.ascom.ImageArray
             logger.info(f'image acquired (open-shutter-time={self.ascom.LastExposureDuration})')
 
-        if self.activities & CameraActivities.CoolingDown:
+        if self.is_active(CameraActivities.CoolingDown):
             temp = self.ascom.CCDTemperature
             if temp <= self.operational_set_point:
-                self.activities &= ~CameraActivities.CoolingDown
-                self.activities &= ~CameraActivities.StartingUp
+                self.end_activity(CameraActivities.CoolingDown, logger)
+                self.end_activity(CameraActivities.StartingUp, logger)
                 logger.info(f'cool-down: done (temperature={temp:.1f}, set-point={self.operational_set_point})')
 
-        if self.activities & CameraActivities.WarmingUp:
+        if self.is_active(CameraActivities.WarmingUp):
             temp = self.ascom.CCDTemperature
             if temp >= self.warm_set_point:
-                # self.ascom.CoolerOn = False
-                self.activities &= ~CameraActivities.WarmingUp
-                self.activities &= ~CameraActivities.ShuttingDown
+                self.ascom.CoolerOn = False
+                logger.info('turned cooler OFF')
+                self.end_activity(CameraActivities.WarmingUp, logger)
+                self.end_activity(CameraActivities.ShuttingDown, logger)
                 logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')

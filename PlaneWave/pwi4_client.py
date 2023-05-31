@@ -15,6 +15,7 @@ except ImportError:
     from urllib import urlencode
     from urllib2 import urlopen, HTTPError
 
+
 class PWI4:
     """
     Client to the PWI4 telescope control application.
@@ -36,11 +37,15 @@ class PWI4:
     def mount_disconnect(self):
         return self.request_with_status("/mount/disconnect")
 
-    def mount_enable(self, axisNum: int):
-        return self.request_with_status("/mount/enable", axis=axisNum)
+    def mount_enable(self, axis_num: int | str):
+        if isinstance(axis_num, str):
+            axis_num = int(axis_num)
+        return self.request_with_status("/mount/enable", axis=axis_num)
 
-    def mount_disable(self, axisNum: int):
-        return self.request_with_status("/mount/disable", axis=axisNum)
+    def mount_disable(self, axis_num: int | str):
+        if isinstance(axis_num, str):
+            axis_num = int(axis_num)
+        return self.request_with_status("/mount/disable", axis=axis_num)
 
     def mount_set_slew_time_constant(self, value: int):
         return self.request_with_status("/mount/set_slew_time_constant", value=value)
@@ -55,22 +60,38 @@ class PWI4:
     def mount_stop(self):
         return self.request_with_status("/mount/stop")
 
-    def mount_goto_ra_dec_apparent(self, ra_hours: float, dec_degs: float):
+    def mount_goto_ra_dec_apparent(self, ra_hours: float | str, dec_degs: float | str):
+        if isinstance(ra_hours, str):
+            ra_hours = float(ra_hours)
+        if isinstance(dec_degs, str):
+            dec_degs = float(dec_degs)
         return self.request_with_status("/mount/goto_ra_dec_apparent", ra_hours=ra_hours, dec_degs=dec_degs)
 
-    def mount_goto_ra_dec_j2000(self, ra_hours: float, dec_degs: float):
+    def mount_goto_ra_dec_j2000(self, ra_hours: float | str, dec_degs: float | str):
+        if isinstance(ra_hours, str):
+            ra_hours = float(ra_hours)
+        if isinstance(dec_degs, str):
+            dec_degs = float(dec_degs)
         return self.request_with_status("/mount/goto_ra_dec_j2000", ra_hours=ra_hours, dec_degs=dec_degs)
 
-    def mount_goto_alt_az(self, alt_degs: float, az_degs: float):
+    def mount_goto_alt_az(self, alt_degs: float | str, az_degs: float | str):
+        if isinstance(alt_degs, str):
+            alt_degs = float(alt_degs)
+        if isinstance(az_degs, str):
+            az_degs = float(az_degs)
         return self.request_with_status("/mount/goto_alt_az", alt_degs=alt_degs, az_degs=az_degs)
 
-    def mount_goto_coord_pair(self, coord0: float, coord1: float, coord_type: str):
+    def mount_goto_coord_pair(self, coord0: float | str, coord1: float | str, coord_type: str):
         """
         Set the mount target to a pair of coordinates in a specified coordinate system.
         coord_type: can currently be "altaz" or "raw"
         coord0: the azimuth coordinate for the "altaz" type, or the axis0 coordiate for the "raw" type
         coord1: the altitude coordinate for the "altaz" type, or the axis1 coordinate for the "raw" type
         """
+        if isinstance(coord0, str):
+            coord0 = float(coord0)
+        if isinstance(coord1, str):
+            coord1 = float(coord1)
         return self.request_with_status("/mount/goto_coord_pair", c0=coord0, c1=coord1, type=coord_type)
 
     def mount_offset(self, **kwargs):
@@ -290,7 +311,9 @@ class PWI4:
     def focuser_disable(self):
         return self.request_with_status("/focuser/disable")
 
-    def focuser_goto(self, target: int):
+    def focuser_goto(self, target: int | str):
+        if isinstance(target, str):
+            target = int(target)
         return self.request_with_status("/focuser/goto", target=target)
 
     def focuser_stop(self):
