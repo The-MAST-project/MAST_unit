@@ -15,9 +15,9 @@ MountType: TypeAlias = "Mount"
 
 class MountActivity(Flag):
     Idle = 0
-    StartingUp =(1 << 0)
+    StartingUp = (1 << 0)
     ShuttingDown = (1 << 1)
-    Slewing = (1 <<2)
+    Slewing = (1 << 2)
     Parking = (1 << 3)
     Tracking = (1 << 4)
     FindingHome = (1 << 5)
@@ -46,6 +46,8 @@ class MountStatus:
                 self.is_slewing = st.mount.is_slewing
                 self.ra_j2000_hours = st.mount.ra_j2000_hours
                 self.dec_j2000_degs = st.mount.dec_j2000_degs
+                self.lmst_hours = st.site.lmst_hours
+                self.ha_hours = self.lmst_hours - self.ra_j2000_hours
                 self.activities = m.activities
                 self.activities_verbal = self.activities.name
                 if self.is_tracking:
@@ -83,11 +85,19 @@ class Mount(Activities):
 
     @return_with_status
     def connect(self):
+        """
+        Connects to the MAST mount controller
+        :mastapi:
+        """
         if self.is_powered:
             self.connected = True
 
     @return_with_status
     def disconnect(self):
+        """
+        Disconnects from the MAST mount controller
+        :mastapi:
+        """
         if self.is_powered:
             self.connected = False
 
@@ -124,6 +134,10 @@ class Mount(Activities):
 
     @return_with_status
     def startup(self):
+        """
+        Performs the MAST startup routine (power ON, fans on and find home)
+        :mastapi:
+        """
         if not self.is_powered:
             Power.power('Mount', PowerState.On)
         if not self.connected:
@@ -134,19 +148,33 @@ class Mount(Activities):
 
     @return_with_status
     def shutdown(self):
+        """
+        Performs the MAST shutdown routine (fans off, park, power OFF)
+        :mastapi:
+        """
         if not self.connected:
             self.connect()
         self.start_activity(MountActivity.ShuttingDown, logger)
         self.pw.request('/fans/off')
         self.park()
+        Power.power('Mount', PowerState.Off)
 
     @return_with_status
     def park(self):
+        """
+        Parks the MAST mount
+        :mastapi:
+        """
         if self.connected:
             self.start_activity(MountActivity.Parking, logger)
             self.pw.mount_park()
 
+    @return_with_status
     def find_home(self):
+        """
+        Tells the MAST mount to find it's HOME indexes
+        :mastapi:
+        """
         if self.connected:
             self.start_activity(MountActivity.FindingHome, logger)
             self.last_axis0_position_degrees = -99999
