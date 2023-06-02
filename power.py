@@ -90,12 +90,11 @@ class Power:
         if isinstance(wanted_state, str):
             wanted_state = PowerState(wanted_state)
 
+        which_socket.id = name2id(which_socket)
         validate(which_socket)
-        for idx, sock in enumerate(sockets):
-            if sock.id.name == which_socket.name:
-                sockets[idx].state = wanted_state
-                logger.info(f'Turned socket[{sockets[which_socket.id].id.name}] to {wanted_state}')
-                time.sleep(2)
+        sockets[which_socket.id].state = wanted_state
+        logger.info(f'Turned socket[{sockets[which_socket.id].id.name}] to {wanted_state}')
+        time.sleep(2)
 
     @staticmethod
     def state(which_socket: SocketId) -> PowerState:
