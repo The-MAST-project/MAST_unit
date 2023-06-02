@@ -5,7 +5,7 @@ import datetime
 from utils import RepeatTimer, return_with_status, Activities
 from typing import TypeAlias
 from mastapi import Mastapi
-from power import Power, PowerState
+from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.stage')
 
@@ -29,7 +29,20 @@ class StageStatus:
     activities: StageActivities
     activities_verbal: str
     api_methods: list
-    not_operational_because: list[str]
+    reasons: list[str]
+
+
+stage_state_str2int_dict: dict = {
+
+    'Idle': 0,
+    'In': 1,
+    'Out': 2,
+    'MovingIn': 3,
+    'MovingOut': 4,
+    'Error': 5,
+    'Science': 1,
+    'Guiding': 2,
+}
 
 
 class StageState(Enum):
@@ -39,8 +52,8 @@ class StageState(Enum):
     MovingIn = 3
     MovingOut = 4
     Error = 5
-    Operational = In
-    Parked = Out
+    Science = In
+    Guiding = Out
 
 
 class Stage(Mastapi, Activities):
@@ -73,7 +86,7 @@ class Stage(Mastapi, Activities):
 
     @property
     def is_powered(self):
-        return Power.is_on('Stage')
+        return Power.is_on(SocketId('Stage'))
 
     @property
     def connected(self) -> bool:
@@ -105,7 +118,8 @@ class Stage(Mastapi, Activities):
     @return_with_status
     def connect(self):
         """
-        Connects to the MAST stage controller
+        Connects to the **MAST** stage controller
+
         :mastapi:
         """
         if self.is_powered:
@@ -114,7 +128,8 @@ class Stage(Mastapi, Activities):
     @return_with_status
     def disconnect(self):
         """
-        Disconnects from the MAST stage controller
+        Disconnects from the **MAST** stage controller
+
         :mastapi:
         """
         if self.is_powered:
@@ -123,34 +138,36 @@ class Stage(Mastapi, Activities):
     @return_with_status
     def startup(self):
         """
-        Startup routine for the MAST stage.  Makes it operational:
+        Startup routine for the **MAST** stage.  Makes it ``operational``:
         * If not powered, powers it ON
         * If not connected, connects to the controller
         * If the stage is not at operational position, it is moved
+
         :mastapi:
         """
         if not self.is_powered:
-            Power.power('Stage', PowerState.On)
+            Power.power(SocketId('Stage'), PowerState.On)
         if not self.connected:
             self.connect()
-        if self.state is not StageState.Operational:
-            self.start_activity(StageActivities.StaringUp)
-            self.move(StageState.Operational)
+        if self.state is not StageState.Science:
+            self.start_activity(StageActivities.StaringUp, logger)
+            self.move(StageState.Science)
 
     @return_with_status
     def shutdown(self):
         """
-        Shutdown routine for the MAST stage.  Makes it idle
+        Shutdown routine for the **MAST** stage.  Makes it ``idle``
+
         :mastapi:
         """
         if not self.is_powered:
             return
 
-        if not self.state == StageState.Parked:
-            self.start_activity(StageActivities.ShuttingDown)
-            self.move(StageState.Parked)
+        if not self.state == StageState.Guiding:
+            self.start_activity(StageActivities.ShuttingDown, logger)
+            self.move(StageState.Guiding)
         self.disconnect()
-        Power.power('Stage', PowerState.Off)
+        Power.power(SocketId('Stage'), PowerState.Off)
 
     @property
     def position(self) -> int:
@@ -167,27 +184,27 @@ class Stage(Mastapi, Activities):
         :mastapi:
         """
         st = StageStatus()
-        st.not_operational_because = list()
+        st.reasons = list()
         st.is_powered = self.is_powered
         if st.is_powered:
             st.is_connected = self.connected
             if st.is_connected:
                 st.state = self.state
-                st.is_operational = st.state == StageState.Operational
+                st.is_operational = st.state == StageState.Science
                 if not st.is_operational:
-                    st.not_operational_because.append(f'state is {st.state} instead of {StageState.Operational}')
+                    st.reasons.append(f'state is {st.state} instead of {StageState.Science}')
                 st.state_verbal = st.state.name
                 st.position = self.position
                 st.activities = self.activities
                 st.activities_verbal = st.activities.name
             else:
-                st.not_operational_because.append('not-connected')
+                st.reasons.append('not-connected')
         else:
             st.is_powered = False
             st.is_operational = False
             st.is_connected = False
-            st.not_operational_because.append('not-powered')
-            st.not_operational_because.append('not-connected')
+            st.reasons.append('not-powered')
+            st.reasons.append('not-connected')
         return st
 
     def ontimer(self):
@@ -221,13 +238,13 @@ class Stage(Mastapi, Activities):
         """
         Starts moving the stage to one of two pre-defined positions
         :mastapi:
-        :param where: Where to move the stage to (either StageState.In or StageState.Out)
+        :param where: Where to move the stage to (either StageState.Science or StageState.Guiding)
         """
         if not self.connected:
             return
 
         if isinstance(where, str):
-            where = StageState(where)
+            where = StageState(stage_state_str2int_dict[where])
         if self.state == where:
             logger.info(f'move: already {where}')
             return

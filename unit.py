@@ -8,7 +8,7 @@ import covers
 import stage
 import mount
 import focuser
-from power import Power, PowerStatus, PowerState
+from power import Power, PowerStatus, PowerState, SocketId
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -41,7 +41,7 @@ class UnitStatus:
     mount: mount.MountStatus
     covers: covers.CoversStatus
     focuser: focuser.FocuserStatus
-    not_operational_because: dict
+    reasons: dict
     activities: UnitActivities
 
     def __init__(self, unit: UnitType):
@@ -65,19 +65,19 @@ class UnitStatus:
         self.is_busy = self.is_autofocusing or self.is_guiding
 
         if not self.is_operational:
-            self.not_operational_because = dict()
-            if self.power and self.power.not_operational_because:
-                self.not_operational_because['power'] = self.power.not_operational_because
-            if self.camera and self.camera.not_operational_because:
-                self.not_operational_because['camera'] = self.camera.not_operational_because
-            if self.mount and self.mount.not_operational_because:
-                self.not_operational_because['mount'] = self.mount.not_operational_because
-            if self.stage and self.stage.not_operational_because:
-                self.not_operational_because['stage'] = self.stage.not_operational_because
-            if self.covers and self.covers.not_operational_because:
-                self.not_operational_because['covers'] = self.covers.not_operational_because
-            if self.focuser and self.focuser.not_operational_because:
-                self.not_operational_because['focuser'] = self.focuser.not_operational_because
+            self.reasons = dict()
+            if self.power and self.power.reasons:
+                self.reasons['power'] = self.power.reasons
+            if self.camera and self.camera.reasons:
+                self.reasons['camera'] = self.camera.reasons
+            if self.mount and self.mount.reasons:
+                self.reasons['mount'] = self.mount.reasons
+            if self.stage and self.stage.reasons:
+                self.reasons['stage'] = self.stage.reasons
+            if self.covers and self.covers.reasons:
+                self.reasons['covers'] = self.covers.reasons
+            if self.focuser and self.focuser.reasons:
+                self.reasons['focuser'] = self.focuser.reasons
 
 
 class Unit(Activities):
@@ -88,7 +88,7 @@ class Unit(Activities):
     id = None
     activities: UnitActivities = UnitActivities.Idle
 
-    not_operational_because: list = []   # list of not_operational_because for the last query
+    reasons: list = []   # list of reasons for the last failure
     mount: mount
     covers: covers
     stage: stage
@@ -117,10 +117,27 @@ class Unit(Activities):
         self.timer.start()
         logger.info('initialized')
 
+    def test_docstring(self, param1: int, param2: int | str):
+        """
+
+        Parameters
+        ----------
+        param1
+        param2
+
+        Returns
+        -------
+
+        """
+
     @return_with_status
     def startup(self):
         """
-        Starts the **MAST** _unit_ subsystems.  Makes it _operational_
+        Starts the **MAST** ``unit`` subsystem.  Makes it ``operational``.
+
+        Returns
+        -------
+
         :mastapi:
         """
         if not self.connected:
@@ -136,7 +153,8 @@ class Unit(Activities):
     @return_with_status
     def shutdown(self):
         """
-        Shuts the **MAST** _unit_ subsystems down.  Makes it _idle_
+        Shuts down the **MAST** ``unit`` subsystem.  Makes it ``idle``.
+
         :mastapi:
         """
         if not self.connected:
@@ -159,6 +177,7 @@ class Unit(Activities):
     def connected(self, value):
         """
         Should connect/disconnect anything that needs connecting/disconnecting
+
         """
 
         self.mount.connected = value
@@ -170,16 +189,17 @@ class Unit(Activities):
     @return_with_status
     def connect(self):
         """
-        Connects the **MAST** _unit_ subsystems to all its ancillaries.
+        Connects the **MAST** ``unit`` subsystems to all its ancillaries.
+
         :mastapi:
-        :return:
         """
         self.connected = True
 
     @return_with_status
     def disconnect(self):
         """
-        Disconnects the **MAST** _unit_ subsystems from all its ancillaries.
+        Disconnects the **MAST** ``unit`` subsystems from all its ancillaries.
+
         :mastapi:
         """
         self.connected = False
@@ -187,7 +207,8 @@ class Unit(Activities):
     @return_with_status
     def start_autofocus(self):
         """
-        Starts the _autofocus_ routine (implemented by PlaneWave)
+        Starts the ``autofocus`` routine (implemented by _PlaneWave_)
+
         :mastapi:
         """
         if not self.connected:
@@ -204,7 +225,8 @@ class Unit(Activities):
     @return_with_status
     def stop_autofocus(self):
         """
-        Stops the _autofocus_ routine
+        Stops the ``autofocus`` routine
+
         :mastapi:
         """
         if not self.connected:
@@ -220,7 +242,7 @@ class Unit(Activities):
     @property
     def is_autofocusing(self) -> bool:
         """
-        Returns the status of the _autofocus_ routine
+        Returns the status of the ``autofocus`` routine
         """
         if not self.connected:
             return False
@@ -230,7 +252,8 @@ class Unit(Activities):
     @return_with_status
     def start_guiding(self):
         """
-        Starts the _autoguide_ routine
+        Starts the ``autoguide`` routine
+
         :mastapi:
         """
         if not self.connected:
@@ -242,7 +265,8 @@ class Unit(Activities):
     @return_with_status
     def stop_guiding(self):
         """
-        Stops the _autoguide_ routine
+        Stops the ``autoguide`` routine
+
         :mastapi:
         """
         if not self.connected:
@@ -265,7 +289,8 @@ class Unit(Activities):
     @return_with_status
     def power_all_on(self):
         """
-        Turn ON all power sockets
+        Turn **ON** all power sockets
+
         :mastapi:
         """
         Power.all_on()
@@ -273,35 +298,47 @@ class Unit(Activities):
     @return_with_status
     def power_all_off(self):
         """
-        Turn OFF all power sockets
+        Turn **OFF** all power sockets
+
         :mastapi:
         """
         Power.all_off()
 
     @return_with_status
-    def power_on(self, socket_id: int | str):
+    def power_on(self, socket_id: SocketId | str):
         """
-        Turn power ON to the specified power socket
+        Turn power **ON** to the specified power socket
+
+        Parameters
+        ----------
+        socket_id : int | str
+            The socket to power **ON**.  Either the socket number or the socket name
         :mastapi:
         """
-        if isinstance(socket_id, str) and socket_id.isnumeric():
-            socket_id = int(socket_id)
+        if isinstance(socket_id, str):
+            socket_id = SocketId(socket_id)
         Power.power(socket_id, PowerState.On)
 
     @return_with_status
-    def power_off(self, socket_id: int | str):
+    def power_off(self, socket_id: SocketId | str):
         """
-        Turn power OFF to the specified power socket
+        Turn power **OFF** to the specified power socket
+
+        Parameters
+        ----------
+        socket_id : int | str
+            The socket to power **OFF**.  Either the socket number or the socket name
         :mastapi:
         """
-        if isinstance(socket_id, str) and socket_id.isnumeric():
-            socket_id = int(socket_id)
+        if isinstance(socket_id, str):
+            socket_id = SocketId(socket_id)
         Power.power(socket_id, PowerState.Off)
 
     def status(self) -> UnitStatus:
         """
-        :return The status of the ``unit`` subsystem:
-        :rtype UnitStatus:
+        Returns
+        -------
+        UnitStatus
         :mastapi:
         """
         return UnitStatus(self)
@@ -309,9 +346,12 @@ class Unit(Activities):
     @return_with_status
     def test_solving(self, exposure_seconds: int | str):
         """
-        Tests the plate solving routine
+        Tests the ``platesolve`` routine
         :mastapi:
-        Parameter: int exposure_seconds: Exposure **time** in seconds
+        Parameter
+        ---------
+        exposure_seconds int
+            Exposure time in seconds
         """
         if not self.camera.connected:
             return

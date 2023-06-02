@@ -3,7 +3,7 @@ from typing import TypeAlias
 import logging
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities
-from power import Power, PowerState
+from power import Power, PowerState, SocketId
 from PlaneWave import pwi4_client
 
 FocuserType: TypeAlias = "Focuser"
@@ -22,17 +22,17 @@ class FocuserStatus:
 
     activities: FocuserActivities = FocuserActivities.Idle
     is_operational: bool
-    not_operational_because: list[str]
+    reasons: list[str]
 
     def __init__(self, f: FocuserType):
         stat = f.pw.status()
         self.ascom = AscomDriverInfo(f.ascom)
-        self.not_operational_because = list()
+        self.reasons = list()
         self.is_powered = f.is_powered
         if self.is_powered:
             self.is_connected = f.connected
             if not self.is_connected:
-                self.not_operational_because.append('not-connected')
+                self.reasons.append('not-connected')
             else:
                 self.is_operational = True
                 self.is_moving = stat.focuser.is_moving
@@ -40,8 +40,8 @@ class FocuserStatus:
         else:
             self.is_operational = False
             self.is_connected = False
-            self.not_operational_because.append('not-powered')
-            self.not_operational_because.append('not-connected')
+            self.reasons.append('not-powered')
+            self.reasons.append('not-connected')
 
         self.activities = f.activities
         self.activities_verbal = self.activities.name
@@ -67,7 +67,7 @@ class Focuser(Activities):
 
     @property
     def is_powered(self):
-        return Power.is_on('Focuser')
+        return Power.is_on(SocketId('Focuser'))
 
     @return_with_status
     def startup(self):
@@ -75,7 +75,7 @@ class Focuser(Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power('Focuser', PowerState.On)
+            Power.power(SocketId('Focuser'), PowerState.On)
         if not self.connected:
             self.connect()
         self.pw.focuser_enable()
@@ -89,7 +89,7 @@ class Focuser(Activities):
             self.disconnect()
         self.pw.focuser_disable()
         if self.is_powered:
-            Power.power('Focuser', PowerState.Off)
+            Power.power(SocketId('Focuser'), PowerState.Off)
 
     @return_with_status
     def connect(self):
@@ -133,9 +133,10 @@ class Focuser(Activities):
     @return_with_status
     def goto(self, position: int | str):
         """
+        Sends the focuser to the specified position
+
         :mastapi:
-        :param position: Target position
-        :return:
+        :param int position: Target position
         """
         if not self.is_powered:
             logger.info('Cannot goto - not-powered')
@@ -157,6 +158,10 @@ class Focuser(Activities):
 
     def status(self) -> FocuserStatus:
         """
-        :mastapi:
+
+        Returns
+        -------
+            FocuserStatus
+
         """
         return FocuserStatus(self)

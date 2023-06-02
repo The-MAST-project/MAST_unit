@@ -3,7 +3,7 @@ import logging
 from enum import Enum, Flag
 from typing import TypeAlias
 from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer
-from power import Power, PowerState
+from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.covers')
 
@@ -24,7 +24,7 @@ class CoversStatus:
     is_operational: bool
     state: CoversStateType
     state_verbal: str
-    not_operational_because: list[str] = None
+    reasons: list[str] = None
     activities: CoverActivities = CoverActivities.Idle
 
 
@@ -39,7 +39,7 @@ class CoversState(Enum):
 
 class Covers(Activities):
     """
-    Uses the PlaneWave ASCOM driver for the mirror covers
+    Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
 
     ascom = None
@@ -61,11 +61,12 @@ class Covers(Activities):
 
     @property
     def is_powered(self):
-        return Power.is_on('Covers')
+        return Power.is_on(SocketId('Covers'))
 
     def connect(self):
         """
-        Connects to the ``MAST`` mirror cover controller
+        Connects to the **MAST** mirror cover controller
+
         :mastapi:
         """
         if self.is_powered:
@@ -73,7 +74,7 @@ class Covers(Activities):
 
     def disconnect(self):
         """
-        Disconnects from the ``MAST`` mirror cover controller
+        Disconnects from the **MAST** mirror cover controller
         :mastapi:
         """
         if self.is_powered:
@@ -99,7 +100,7 @@ class Covers(Activities):
         :mastapi:
         """
         st = CoversStatus()
-        st.not_operational_because = list()
+        st.reasons = list()
         st.ascom = AscomDriverInfo(self.ascom)
         st.state = self.state()
         st.is_powered = self.is_powered
@@ -109,22 +110,23 @@ class Covers(Activities):
             if st.is_connected:
                 st.is_operational = st.state == CoversState.Open
                 if not st.is_operational:
-                    st.not_operational_because.append(f'state is {st.state} instead of {CoversState.Open}')
+                    st.reasons.append(f'state is {st.state} instead of {CoversState.Open}')
                 st.state = self.state()
                 st.state_verbal = st.state.name
             else:
-                st.not_operational_because.append('not-connected')
+                st.reasons.append('not-connected')
         else:
             st.is_connected = False
             st.is_operational = False
-            st.not_operational_because.append('not-powered')
-            st.not_operational_because.append('not-connected')
+            st.reasons.append('not-powered')
+            st.reasons.append('not-connected')
         return st
 
     @return_with_status
     def open(self):
         """
-        Starts opening the ``MAST`` mirror covers
+        Starts opening the **MAST** mirror covers
+
         :mastapi:
         """
         if not self.connected:
@@ -137,7 +139,7 @@ class Covers(Activities):
     @return_with_status
     def close(self):
         """
-        Starts closing the ``MAST`` mirror covers
+        Starts closing the **MAST** mirror covers
         :mastapi:
         """
         if not self.connected:
@@ -150,11 +152,12 @@ class Covers(Activities):
     @return_with_status
     def startup(self):
         """
-        Performs the ``startup`` procedure for the ``MAST`` mirror covers controller
+        Performs the ``startup`` routine for the **MAST** mirror covers controller
+
         :mastapi:
         """
         if not self.is_powered:
-            Power.power('Covers', PowerState.On)
+            Power.power(SocketId('Covers'), PowerState.On)
         if not self.connected:
             self.connect()
         if self.state() != CoversState.Open:
@@ -164,7 +167,8 @@ class Covers(Activities):
     @return_with_status
     def shutdown(self):
         """
-        Performs the ``shutdown`` procedure for the ``MAST`` mirror covers controller
+        Performs the ``shutdown`` procedure for the **MAST** mirror covers controller
+
         :mastapi:
         """
         if not self.connected:
@@ -187,3 +191,4 @@ class Covers(Activities):
             self.end_activity(CoverActivities.Closing, logger)
             if self.is_active(CoverActivities.ShuttingDown):
                 self.end_activity(CoverActivities.ShuttingDown, logger)
+                Power.power(SocketId('Covers'), PowerState.Off)

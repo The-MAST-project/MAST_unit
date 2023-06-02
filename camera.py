@@ -4,7 +4,7 @@ import logging
 import astropy.units as u
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status
-from power import Power, PowerState
+from power import Power, PowerState, SocketId
 from utils import Activities
 
 CameraType: TypeAlias = "Camera"
@@ -27,11 +27,11 @@ class CameraStatus:
     is_operational: bool
     temperature: float
     cooler_power: float # percent
-    not_operational_because: list[str]
+    reasons: list[str]
 
     def __init__(self, c: CameraType):
         self.ascom = AscomDriverInfo(c.ascom)
-        self.not_operational_because = list()
+        self.reasons = list()
         self.is_powered = c.is_powered
         self.is_operational = False
         if self.is_powered:
@@ -41,15 +41,15 @@ class CameraStatus:
                 self.temperature = c.ascom.CCDTemperature
                 self.is_operational = abs(self.temperature - set_point) <= 0.5
                 if not self.is_operational:
-                    self.not_operational_because.append(f'temperature: abs({self.temperature} - {set_point}) > 0.5 deg')
+                    self.reasons.append(f'temperature: abs({self.temperature} - {set_point}) > 0.5 deg')
                 self.cooler_power = c.ascom.CoolerPower
             else:
-                self.not_operational_because.append('not-connected')
+                self.reasons.append('not-connected')
         else:
             self.is_operational = False
             self.is_connected = False
-            self.not_operational_because.append('not-powered')
-            self.not_operational_because.append('not-connected')
+            self.reasons.append('not-powered')
+            self.reasons.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
 
@@ -107,20 +107,50 @@ class Camera(Activities):
 
     @property
     def is_powered(self):
-        return Power.is_on('Camera')
+        return Power.is_on(SocketId('Camera'))
 
     @return_with_status
     def connect(self):
+        """
+        Connects to the **MAST** camera
+
+        :mastapi:
+        Returns
+        -------
+
+        """
         if self.is_powered:
             self.connected = True
 
     @return_with_status
     def disconnect(self):
+        """
+        Disconnects from the **MAST* camera
+
+        :mastapi:
+        """
         if self.is_powered:
             self.connected = False
 
     @return_with_status
     def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
+        """
+        Starts a **MAST** camera exposure
+
+        Parameters
+        ----------
+        seconds
+            Exposure length in seconds
+        shutter
+            - True open shutter (light exposure)
+            - False close shutter (dark exposure)
+        readout_mode
+            TBD
+
+        Returns
+        -------
+
+        """
         if self.connected:
             self.start_activity(CameraActivities.Exposing, logger)
             self.image = None
@@ -134,6 +164,10 @@ class Camera(Activities):
 
     @return_with_status
     def stop_exposure(self):
+        """
+        Stop (abort) the current **MAST** camera exposure
+
+        """
         if not self.connected:
             return
 
@@ -151,8 +185,14 @@ class Camera(Activities):
 
     @return_with_status
     def startup(self):
+        """
+        Starts the **MAST** camera up (cooling down , if needed)
+
+        :mastapi:
+
+        """
         if not self.is_powered:
-            Power.power('Camera', PowerState.On)
+            Power.power(SocketId('Camera'), PowerState.On)
         if not self.connected:
             self.connect()
         if self.connected:
@@ -176,6 +216,11 @@ class Camera(Activities):
 
     @return_with_status
     def shutdown(self):
+        """
+        Shuts the **MAST** camera down (warms up, if needed)
+
+        :mastapi:
+        """
         if self.connected:
             self.start_activity(CameraActivities.ShuttingDown, logger)
             if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
@@ -183,6 +228,9 @@ class Camera(Activities):
 
     @return_with_status
     def warmup(self):
+        """
+        Warms the **MAST** camera up, to prevent temperature shock
+        """
         if not self.connected:
             return
 
@@ -220,3 +268,4 @@ class Camera(Activities):
                 self.end_activity(CameraActivities.WarmingUp, logger)
                 self.end_activity(CameraActivities.ShuttingDown, logger)
                 logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')
+                Power.power(SocketId('Camera'), PowerState.Off)

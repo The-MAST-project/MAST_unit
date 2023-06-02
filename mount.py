@@ -6,7 +6,7 @@ from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
 from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status
-from power import Power, PowerState
+from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.mount')
 
@@ -27,7 +27,7 @@ class MountStatus:
 
     def __init__(self, m: MountType):
         self.ascom = AscomDriverInfo(m.ascom)
-        self.not_operational_because = list()
+        self.reasons = list()
         st = m.pw.status()
         self.is_powered = m.is_powered
         if self.is_powered:
@@ -41,7 +41,7 @@ class MountStatus:
                     reason = f'one of the axes is not enabled: ' + \
                         f'axis0={"enabled" if st.mount.axis0.is_enabled else "disabled"} ' + \
                         f'axis1={"enabled" if st.mount.axis1.is_enabled else "disabled"} '
-                    self.not_operational_because.append(reason)
+                    self.reasons.append(reason)
                 self.is_tracking = st.mount.is_tracking
                 self.is_slewing = st.mount.is_slewing
                 self.ra_j2000_hours = st.mount.ra_j2000_hours
@@ -55,12 +55,12 @@ class MountStatus:
                 if self.is_slewing:
                     self.activities |= MountActivity.Slewing
             else:
-                self.not_operational_because.append('not-connected')
+                self.reasons.append('not-connected')
         else:
             self.is_operational = False
             self.is_connected = False
-            self.not_operational_because.append('not-powered')
-            self.not_operational_because.append('not-connected')
+            self.reasons.append('not-powered')
+            self.reasons.append('not-connected')
 
 
 class Mount(Activities):
@@ -81,7 +81,7 @@ class Mount(Activities):
 
     @property
     def is_powered(self):
-        return Power.is_on('Mount')
+        return Power.is_on(SocketId('Mount'))
 
     @return_with_status
     def connect(self):
@@ -139,7 +139,7 @@ class Mount(Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power('Mount', PowerState.On)
+            Power.power(SocketId('Mount'), PowerState.On)
         if not self.connected:
             self.connect()
         self.start_activity(MountActivity.StartingUp, logger)
@@ -157,7 +157,7 @@ class Mount(Activities):
         self.start_activity(MountActivity.ShuttingDown, logger)
         self.pw.request('/fans/off')
         self.park()
-        Power.power('Mount', PowerState.Off)
+        Power.power(SocketId('Mount'), PowerState.Off)
 
     @return_with_status
     def park(self):
