@@ -2,10 +2,11 @@ import win32com.client
 import logging
 from enum import Enum, Flag
 from typing import TypeAlias
-from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer
+from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log
 from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.covers')
+init_log(logger)
 
 CoversStateType: TypeAlias = "CoversState"
 

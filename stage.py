@@ -2,12 +2,13 @@
 import logging
 from enum import Enum, Flag
 import datetime
-from utils import RepeatTimer, return_with_status, Activities
+from utils import RepeatTimer, return_with_status, Activities, init_log
 from typing import TypeAlias
 from mastapi import Mastapi
 from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.stage')
+init_log(logger)
 
 StageStateType: TypeAlias = "StageState"
 

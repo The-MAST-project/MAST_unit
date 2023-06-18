@@ -2,14 +2,28 @@ import win32com.client
 from typing import TypeAlias
 import logging
 import astropy.units as u
-from enum import Flag
-from utils import AscomDriverInfo, RepeatTimer, return_with_status
+from enum import Flag, Enum
+from utils import AscomDriverInfo, RepeatTimer, return_with_status, init_log
 from power import Power, PowerState, SocketId
 from utils import Activities
 
 CameraType: TypeAlias = "Camera"
 
 logger = logging.getLogger('mast.unit.camera')
+logger.setLevel(logging.DEBUG)
+init_log(logger)
+
+
+class CameraState(Enum):
+    """
+    Camera states as per https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CameraStates.htm
+    """
+    Idle = 0
+    Waiting = 1
+    Exposing = 2
+    Reading = 3
+    Download = 4
+    Error = 5
 
 
 class CameraActivities(Flag):
@@ -19,6 +33,7 @@ class CameraActivities(Flag):
     Exposing = (1 << 2)
     ShuttingDown = (1 << 3)
     StartingUp = (1 << 4)
+    ReadingOut = (1 << 5)
 
 
 class CameraStatus:
@@ -26,7 +41,9 @@ class CameraStatus:
     activities: CameraActivities
     is_operational: bool
     temperature: float
-    cooler_power: float # percent
+    cooler_power: float  # percent
+    state: CameraState
+
     reasons: list[str]
 
     def __init__(self, c: CameraType):
@@ -43,6 +60,7 @@ class CameraStatus:
                 if not self.is_operational:
                     self.reasons.append(f'temperature: abs({self.temperature} - {set_point}) > 0.5 deg')
                 self.cooler_power = c.ascom.CoolerPower
+                self.state_verbal = str(CameraState(c.ascom.CameraState))
             else:
                 self.reasons.append('not-connected')
         else:
@@ -66,21 +84,23 @@ class Camera(Activities):
     PixelSizeY: int
     NumX: int
     NumY: int
-    Xrad: float
-    Yrad: float
+    RadX: float
+    RadY: float
     ascom = None
     activities: CameraActivities = CameraActivities.Idle
     timer: RepeatTimer
     image = None
+    last_state: CameraState = None
 
     def __init__(self, driver: str, set_point: float = None):
+        logger.setLevel(level=logging.DEBUG)
         try:
             self.ascom = win32com.client.Dispatch(driver)
         except Exception as ex:
             logger.exception(ex)
             raise ex
 
-        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.timer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'camera-timer'
         self.timer.start()
         logger.info('initialized')
@@ -101,8 +121,8 @@ class Camera(Activities):
             self.PixelSizeY = self.ascom.PixelSizeY
             self.NumX = self.ascom.NumX
             self.NumY = self.ascom.NumY
-            self.Xrad = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
-            self.Yrad = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
+            self.RadX = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
+            self.RadY = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         logger.info(f'connected = {value}')
 
     @property
@@ -133,7 +153,7 @@ class Camera(Activities):
             self.connected = False
 
     @return_with_status
-    def start_exposure(self, seconds: int, shutter: bool, readout_mode: int):
+    def start_exposure(self, seconds: int):
         """
         Starts a **MAST** camera exposure
 
@@ -141,32 +161,24 @@ class Camera(Activities):
         ----------
         seconds
             Exposure length in seconds
-        shutter
-            - True open shutter (light exposure)
-            - False close shutter (dark exposure)
-        readout_mode
-            TBD
 
-        Returns
-        -------
-
+        :mastapi:
         """
         if self.connected:
             self.start_activity(CameraActivities.Exposing, logger)
             self.image = None
-            if not self.ascom.HasShutter:
-                shutter = False
 
             # readout mode, binning, gain?
 
-            self.ascom.StartExposure(seconds, shutter)
-            logger.info(f'exposure started (seconds={seconds}, shutter={shutter})')
+            self.ascom.StartExposure(seconds, True)
+            logger.info(f'exposure started (seconds={seconds})')
 
     @return_with_status
-    def stop_exposure(self):
+    def abort_exposure(self):
         """
-        Stop (abort) the current **MAST** camera exposure
+        Aborts the current **MAST** camera exposure. No image readout.
 
+        :mastapi:
         """
         if not self.connected:
             return
@@ -180,7 +192,28 @@ class Camera(Activities):
             logger.info(f'ASCOM camera "{self.ascom.Name}" cannot stop exposure')
         self.end_activity(CameraActivities.Exposing, logger)
 
+    @return_with_status
+    def stop_exposure(self):
+        """
+        Stops the current **MAST** camera exposure.  An image readout is initiated
+
+        :mastapi:
+        """
+        if not self.connected:
+            return
+
+        if self.is_active(CameraActivities.Exposing):
+            self.ascom.StopExposure() # the timer will read the image
+
     def status(self) -> CameraStatus:
+        """
+        Gets the **MAST** camera status
+
+        :mastapi:
+        Returns
+        -------
+
+        """
         return CameraStatus(self)
 
     @return_with_status
@@ -196,6 +229,7 @@ class Camera(Activities):
         if not self.connected:
             self.connect()
         if self.connected:
+            self.ascom.CoolerOn = True
             if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
                 self.cooldown()
 
@@ -248,10 +282,23 @@ class Camera(Activities):
         if not self.connected:
             return
 
+        if self.last_state is None:
+            self.last_state = self.ascom.CameraState
+            logger.info(f'state changed from None to {CameraState(self.last_state)}')
+        else:
+            state = self.ascom.CameraState
+            if not state == self.last_state:
+                percent = ''
+                if state == CameraState.Exposing or state == CameraState.Waiting or state == CameraState.Reading or \
+                        state == CameraState.Download:
+                    percent = f'{self.ascom.PercentCompleted} %'
+                logger.info(f'state changed from {CameraState(self.last_state)} to {CameraState(state)} {percent}')
+                self.last_state = state
+
         if self.is_active(CameraActivities.Exposing) and self.ascom.ImageReady:
-            self.end_activity(CameraActivities.Exposing, logger)
             self.image = self.ascom.ImageArray
-            logger.info(f'image acquired (open-shutter-time={self.ascom.LastExposureDuration})')
+            logger.info(f'image acquired (shutter was open for {self.ascom.LastExposureDuration} seconds)')
+            self.end_activity(CameraActivities.Exposing, logger)
 
         if self.is_active(CameraActivities.CoolingDown):
             temp = self.ascom.CCDTemperature

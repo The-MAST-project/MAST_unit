@@ -2,13 +2,14 @@ import win32com.client
 from typing import TypeAlias
 import logging
 from enum import Flag
-from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities
+from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log
 from power import Power, PowerState, SocketId
 from PlaneWave import pwi4_client
 
 FocuserType: TypeAlias = "Focuser"
 
 logger = logging.getLogger('mast.unit.focuser')
+init_log(logger)
 
 
 class FocuserActivities(Flag):
@@ -32,6 +33,7 @@ class FocuserStatus:
         if self.is_powered:
             self.is_connected = f.connected
             if not self.is_connected:
+                self.is_operational = False
                 self.reasons.append('not-connected')
             else:
                 self.is_operational = True

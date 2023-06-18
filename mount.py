@@ -5,10 +5,12 @@ import logging
 from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
-from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status
+from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log
 from power import Power, PowerState, SocketId
 
 logger = logging.getLogger('mast.unit.mount')
+logger.setLevel(logging.DEBUG)
+init_log(logger)
 
 MountType: TypeAlias = "Mount"
 

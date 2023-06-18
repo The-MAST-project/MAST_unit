@@ -10,6 +10,11 @@ import json
 from typing import Any
 import logging
 import io
+import re
+import psutil
+import subprocess
+import time
+from multiprocessing import shared_memory
 
 
 class RepeatTimer(Timer):
@@ -128,10 +133,10 @@ class DailyFileHandler(logging.FileHandler):
 
 
 def init_log(logger: logging.Logger):
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s} - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -211,3 +216,99 @@ class Subsystem:
         self.path = path
         self.obj = obj
         self.obj_name = obj_name
+
+
+def parse_params(memory: shared_memory.SharedMemory) -> dict:
+    bytes_array = bytearray(memory.buf)
+    string_array = bytes_array.decode(encoding='utf-8')
+    data = string_array[:string_array.find('\x00')]
+
+    matches = re.findall(r'(\w+(?:\(\d+\))?)\s*=\s*(.*?)(?=(!|$|\w+(\(\d+\))?\s*=))', data)
+    d = {}
+    for match in matches:
+        values = match[1].strip()
+        d[match[0]] = re.split(r' (?![A-Za-z])', values)
+    return d
+
+
+def store_params(memory: shared_memory.SharedMemory, d: dict):
+    params = []
+    for k, v in d.items():
+        params.append(f'{k}={v}')
+    data = ' '.join(params)
+    memory.buf[:memory.size] = bytearray(memory.size)  # wipe it clean
+    memory.buf[:len(data)] = bytearray(data.encode(encoding='utf-8'))
+
+
+def find_process(patt: str = None, pid: int | None = None) -> psutil.Process:
+    """
+    Searches for a running process either by a pattern in the command line or by pid
+
+    Parameters
+    ----------
+    patt
+    pid
+
+    Returns
+    -------
+
+    """
+    ret = None
+    if patt:
+        patt = re.compile(patt, re.IGNORECASE)
+        for proc in psutil.process_iter():
+            try:
+                argv = proc.cmdline()
+                for arg in argv:
+                    if patt.search(arg) and proc.status() == psutil.STATUS_RUNNING:
+                        ret = proc
+                        break
+            except psutil.AccessDenied:
+                continue
+    elif pid:
+        proc = [(x.pid == pid and x.status() == psutil.STATUS_RUNNING) for x in psutil.process_iter()]
+        ret = proc[0]
+
+    return ret
+
+def ensure_process_is_running(pattern: str, cmd: str, logger: logging.Logger, env: dict = None,
+                              cwd: str = None, shell: bool = False) -> psutil.Process:
+    """
+    Makes sure a process containing 'pattern' in the command line exists.
+    If it's not running, it starts one using 'cmd' and waits till it is running
+
+    Parameters
+    ----------
+    pattern: str The pattern to lookup in the command line of processes
+    cmd: str - The command to use to start a new process
+    env: dict - An environment dictionary
+    cwd: str - Current working directory
+    shell: bool - Run the cmd in a shell
+    logger
+
+    Returns
+    -------
+
+    """
+
+
+    p = find_process(pattern)
+    if p is not None:
+        logger.debug(f'A process with pattern={pattern} in the commandline exists, pid={p.pid}')
+        return p
+
+    # It's not running, start it
+    if shell:
+        process = subprocess.Popen(args=cmd, env=env, shell=True, cwd=cwd)
+    else:
+        args = cmd.split()
+        process = subprocess.Popen(args, env=env, executable=args[0], cwd=cwd)
+    logger.info(f"started process (pid={process.pid}) with cmd: '{cmd}'")
+
+    p = None
+    while not p:
+        p = find_process(pattern)
+        if p:
+            return p
+        logger.info(f"waiting for proces with pattern='{pattern}' to run")
+        time.sleep(1)

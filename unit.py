@@ -1,4 +1,8 @@
+import datetime
 import logging
+import psutil
+
+import utils
 from PlaneWave import pwi4_client
 from PlaneWave.platesolve import platesolve
 import time
@@ -13,16 +17,22 @@ from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
 import tempfile
-import os
 import numpy as np
 from utils import return_with_status, Activities, RepeatTimer
 from enum import Flag
+from threading import Thread
+from semaphore_win_ctypes import Semaphore
+from multiprocessing.shared_memory import SharedMemory
+from utils import parse_params, ensure_process_is_running, store_params, init_log
+from camera import CameraActivities
+import os
+import subprocess
 
 UnitType: TypeAlias = "Unit"
 
 logger = logging.getLogger('mast.unit')
-
-MAX_UNITS = 20
+logger.setLevel(logging.DEBUG)
+init_log(logger)
 
 
 class UnitActivities(Flag):
@@ -82,6 +92,8 @@ class UnitStatus:
 
 class Unit(Activities):
 
+    MAX_UNITS = 20
+
     _connected: bool = False
     _is_guiding: bool = False
     _is_autofocusing = False
@@ -96,10 +108,35 @@ class Unit(Activities):
     pw: pwi4_client.PWI4
 
     timer: RepeatTimer
+    plate_solver_process: psutil.Process | subprocess.Popen
+
+    # Stuff for plate solving
+    image_params_shm: SharedMemory = None
+    image_shm: SharedMemory = None
+    results_shm: SharedMemory = None
+    plate_solving_semaphore: Semaphore = None
+    was_tracking_before_guiding: bool
+    have_semaphore: bool = False
+
+    GUIDING_EXPOSURE_SECONDS = 5
+    GUIDING_INTER_EXPOSURE_SECONDS = 30
 
     def __init__(self, unit_id: int):
-        if unit_id < 0 or unit_id > MAX_UNITS:
-            raise f'Unit id must be between 0 and {MAX_UNITS}'
+        if unit_id < 0 or unit_id > self.MAX_UNITS:
+            raise f'Unit id must be between 0 and {self.MAX_UNITS}'
+
+        self.plate_solving_semaphore = Semaphore(name='PlateSolving')
+        self.plate_solving_semaphore.create()
+
+        try:
+            self.image_params_shm = SharedMemory(name='PlateSolving_Params')
+        except FileNotFoundError:
+            self.image_params_shm = SharedMemory(name='PlateSolving_Params', create=True, size=4096)
+
+        try:
+            self.results_shm = SharedMemory(name='PlateSolving_Results')
+        except FileNotFoundError:
+            self.results_shm = SharedMemory(name='PlateSolving_Results', create=True, size=4096)
 
         self.id = unit_id
         try:
@@ -110,25 +147,21 @@ class Unit(Activities):
             self.mount = mount.Mount()
             self.stage = stage.Stage()
         except Exception as ex:
-            logger.exception(ex)
+            logger.exception(msg='could not create a Unit', exc_info=ex)
+            raise ex
 
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'unit-timer'
         self.timer.start()
         logger.info('initialized')
 
-    def test_docstring(self, param1: int, param2: int | str):
-        """
-
-        Parameters
-        ----------
-        param1
-        param2
-
-        Returns
-        -------
-
-        """
+    def do_startup(self):
+        self.start_activity(UnitActivities.StartingUp, logger)
+        self.mount.startup()
+        self.stage.startup()
+        self.camera.startup()
+        self.covers.startup()
+        self.focuser.startup()
 
     @return_with_status
     def startup(self):
@@ -140,15 +173,21 @@ class Unit(Activities):
 
         :mastapi:
         """
-        if not self.connected:
-            self.connect()
+        # if not self.connected:
+            # self.connect()
 
-        self.start_activity(UnitActivities.StartingUp, logger)
-        self.mount.startup()
-        self.stage.startup()
-        self.camera.startup()
-        self.covers.startup()
-        self.focuser.startup()
+        if self.is_active(UnitActivities.StartingUp):
+            return
+
+        Thread(name='startup', target=self.do_startup).start()
+
+    def do_shutdown(self):
+        self.start_activity(UnitActivities.ShuttingDown, logger)
+        self.mount.shutdown()
+        self.covers.shutdown()
+        self.camera.shutdown()
+        self.stage.shutdown()
+        self.focuser.shutdown()
 
     @return_with_status
     def shutdown(self):
@@ -160,12 +199,10 @@ class Unit(Activities):
         if not self.connected:
             self.connect()
 
-        self.start_activity(UnitActivities.ShuttingDown, logger)
-        self.mount.shutdown()
-        self.covers.shutdown()
-        self.camera.shutdown()
-        self.stage.shutdown()
-        self.focuser.shutdown()
+        if self.is_active(UnitActivities.ShuttingDown):
+            return
+
+        Thread(name='shutdown', target=self.do_shutdown).start()
 
     @property
     def connected(self):
@@ -185,6 +222,14 @@ class Unit(Activities):
         self.covers.connected = value
         self.stage.connected = value
         self.focuser.connected = value
+
+        if value:
+            # it's only at this stage that we know the imager size
+            try:
+                self.image_shm = SharedMemory(name='PlateSolving_Image')
+            except FileNotFoundError:
+                size = self.camera.ascom.NumX * self.camera.ascom.NumY * 4
+                self.image_shm = SharedMemory(name='PlateSolving_Image', create=True, size=size)
 
     @return_with_status
     def connect(self):
@@ -249,6 +294,148 @@ class Unit(Activities):
 
         return self.pw.status().autofocus.is_running
 
+    def acquire_semaphore(self):
+        if self.have_semaphore:
+            logger.info(f"already have semaphore '{self.plate_solving_semaphore.name}'")
+            return
+
+        sem = None
+        logger.info(f"trying to acquire semaphore '{self.plate_solving_semaphore.name}'")
+        while not sem:
+            try:
+                sem = self.plate_solving_semaphore.acquire(timeout_ms=500)
+            except OSError:
+                logger.info("timed out waiting for semaphore '{self.plate_solving_semaphore.name}' ...")
+                time.sleep(.5)
+        self.have_semaphore = True
+        logger.info(f'acquired semaphore {self.plate_solving_semaphore.name}')
+
+    def release_semaphore(self):
+        self.plate_solving_semaphore.release()
+        self.have_semaphore = False
+        logger.info(f"released semaphore {self.plate_solving_semaphore.name}")
+
+    def end_guiding(self):
+        self.release_semaphore()
+        self.plate_solver_process.kill()
+        logger.info(f'guiding ended')
+
+    def do_guide(self):
+
+        proc = None
+        pid_file = 'PlateSolveSimulator/.pid'
+        if os.path.exists(pid_file):
+            with open(pid_file, 'r') as f:
+                pid = int(f.readline().strip())
+            if psutil.pid_exists(pid):
+                for proc in psutil.process_iter():
+                    if proc.pid == pid:
+                        break
+            os.unlink(pid_file)
+
+        if proc:
+            self.plate_solver_process.kill()
+            logger.info(f'killed existing plate solving process (pid={self.plate_solver_process.pid})')
+
+        self.acquire_semaphore()    # prevent newly spawned process from acquiring it
+        subprocess.Popen("c:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator/run.bat",
+                         cwd='C:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator',
+                         shell=True)
+        self.plate_solver_process = utils.find_process(patt='PSSimulator')
+
+        logger.info(f'plate solver process pid={self.plate_solver_process.pid}')
+
+        last_ra: float = -1
+        last_dec: float = -1
+
+        while self.is_active(UnitActivities.Guiding):
+            logger.info(f'starting {self.GUIDING_EXPOSURE_SECONDS} seconds guiding exposure')
+            self.camera.start_exposure(seconds=self.GUIDING_EXPOSURE_SECONDS)
+            while self.camera.is_active(CameraActivities.Exposing):
+                if not self.is_active(UnitActivities.Guiding):
+                    self.end_guiding()
+                    return
+                time.sleep(2)
+
+            if not self.is_active(UnitActivities.Guiding):
+                self.end_guiding()
+                return
+
+            logger.info(f'guiding exposure done, getting the image from the camera')
+            if not self.image_shm:
+                self.image_shm = SharedMemory(name='PlateSolving_Image', create=True,
+                                              size=(self.camera.NumY * self.camera.NumX * 4))
+            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY),
+                                      dtype=np.uint32, buffer=self.image_shm.buf)
+            shared_image[:] = self.camera.image[:]
+            logger.info(f'copied image to shared memory')
+
+            self.acquire_semaphore()
+
+            if not self.is_active(UnitActivities.Guiding):
+                self.end_guiding()
+                return
+
+            pw_status = self.pw.status()
+            # try to fool the plate solver by skewing ra and dec ?!?
+            ra = pw_status.mount.ra_j2000_hours
+            dec = pw_status.mount.dec_j2000_degs
+
+            d = {
+                'ra': ra,
+                'dec': dec,
+                'NumX': self.camera.NumX,
+                'NumY': self.camera.NumY,
+            }
+            store_params(self.image_params_shm, d)
+
+            # let the solver know it has a new job
+            self.release_semaphore()
+
+            # plate solver is now solving
+
+            if not self.is_active(UnitActivities.Guiding):
+                self.end_guiding()
+                return
+
+            # wait till the solver is done
+            self.acquire_semaphore()
+
+            logger.info('parsing plate solving result')
+            results = parse_params(self.results_shm)
+            self.release_semaphore()
+
+            if 'succeeded' not in results.keys() or not results['succeeded']:
+                logger.warning(f"plate solving failed")
+                # TODO: what do we do?  try again?  bail out?
+
+            if last_ra == -1 or last_dec == -1:  # first time?
+                last_ra = results['ra']
+                last_dec = results['dec']
+                continue
+
+            delta_ra = results['ra'] - last_ra      # mind sign and mount offset direction
+            delta_dec = results['dec'] - last_dec   # ditto
+
+            # tell the mount to correct by (delta_ra, delta_dec)
+            logger.info(f'TODO: telling mount to correct by ra={delta_ra}, dec={delta_dec} ...')
+            self.pw.mount_goto_ra_dec_j2000(ra + delta_ra, dec + delta_dec)
+            pw_status = self.pw.status()
+            while pw_status.mount.is_slewing:
+                logger.info(f'waiting for mount to stop slewing ...')
+                time.sleep(1)
+
+            logger.info(f'mount stopped slewing')
+
+            # avoid sleeping for a long time, for better agility at sensing that guiding was stopped
+            td = datetime.timedelta(seconds=self.GUIDING_INTER_EXPOSURE_SECONDS)
+            start = datetime.datetime.now()
+            while (datetime.datetime.now() - start) <= td:
+                if not self.is_active(UnitActivities.Guiding):
+                    self.end_guiding()
+                    return
+                time.sleep(1)
+
     @return_with_status
     def start_guiding(self):
         """
@@ -257,10 +444,20 @@ class Unit(Activities):
         :mastapi:
         """
         if not self.connected:
-            logger.warning('Cannot start guiding - not-connected')
+            logger.warning('cannot start guiding - not-connected')
             return
 
+        # if self.is_active(UnitActivities.Guiding):
+            # return
+
+        pw_stat = self.pw.status()
+        self.was_tracking_before_guiding = pw_stat.mount.is_tracking
+        if not self.was_tracking_before_guiding:
+            self.pw.mount_tracking_on()
+            logger.info('started mount tracking')
+
         self.start_activity(UnitActivities.Guiding, logger)
+        Thread(name='guiding', target=self.do_guide).start()
 
     @return_with_status
     def stop_guiding(self):
@@ -275,6 +472,14 @@ class Unit(Activities):
 
         if self.is_active(UnitActivities.Guiding):
             self.end_activity(UnitActivities.Guiding, logger)
+
+        if self.plate_solver_process:
+            self.plate_solver_process.kill()
+            logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
+
+        if not self.was_tracking_before_guiding:
+            self.mount.stop_tracking()
+            logger.info('stopped tracking')
 
     def is_guiding(self) -> bool:
         if not self.connected:
@@ -412,4 +617,27 @@ class Unit(Activities):
                     self.covers.is_active(covers.CoverActivities.ShuttingDown) or
                     self.mount.is_active(mount.MountActivity.ShuttingDown)):
                 self.end_activity(UnitActivities.ShuttingDown, logger)
-                
+
+    def end_lifespan(self):
+        logger.info('unit end lifespan')
+        if self.plate_solver_process:
+            self.plate_solver_process.kill()
+
+        for shm in [self.image_shm, self.image_params_shm, self.results_shm]:
+            shm.close()
+            shm.unlink()
+        self.plate_solving_semaphore.close()
+
+        self.camera.ascom.Connected = False
+        self.mount.ascom.Connected = False
+        self.focuser.ascom.Connected = False
+
+    @staticmethod
+    def start_lifespan():
+        logger.debug('unit start lifespan')
+        ensure_process_is_running(pattern='PWI4',
+                                  cmd='C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Interface 4/PWI4.exe',
+                                  logger=logger)
+        ensure_process_is_running(pattern='PWShutter',
+                                  cmd="C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Shutter Control/PWShutter.exe",
+                                  logger=logger)

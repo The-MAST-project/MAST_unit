@@ -3,11 +3,12 @@ from enum import Enum
 import logging
 import time
 from typing import TypeAlias
-from utils import return_with_status
+from utils import return_with_status, init_log
 
 PowerType: TypeAlias = "Power"
 
 logger = logging.getLogger('mast.unit.power')
+init_log(logger)
 
 
 class PowerState(Enum):
@@ -132,8 +133,8 @@ class Power:
 
     @staticmethod
     def all_off():
-        for s in sockets:
-            Power.power(SocketId(s.id.name), PowerState.Off)
+        for sock in sockets:
+            Power.power(SocketId(sock.id.name), PowerState.Off)
 
 
 def validate(socket_id: SocketId):

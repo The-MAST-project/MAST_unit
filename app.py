@@ -2,20 +2,42 @@ import uvicorn
 from fastapi import FastAPI, Request
 from PlaneWave import pwi4_client
 from unit import Unit
-from utils import init_log, PrettyJSONResponse, HelpResponse, quote, Subsystem
+from utils import init_log, PrettyJSONResponse, HelpResponse, quote, Subsystem, ensure_process_is_running
 import inspect
 from mastapi import Mastapi
 from openapi import make_openapi_schema
-
 import logging
+from contextlib import asynccontextmanager
 
 unit_id = 17
-logger = logging.getLogger('mast')
+logger = logging.Logger('mast')
 init_log(logger)
+unit = None
+pw = None
+try:
+    pw = pwi4_client.PWI4()
+    unit = Unit(unit_id)
+except Exception as ex:
+    logger.error('Could not create a Unit object', exc_info=ex)
 
-app = FastAPI(docs_url='/docs', redocs_url=None, openapi_url='/mast/api/v1/openapi.json')
-pw = pwi4_client.PWI4()
-unit = Unit(unit_id)
+if not unit:
+    logger.error('No unit')
+    exit(1)
+
+
+@asynccontextmanager
+async def lifespan(fast_app: FastAPI):
+    Unit.start_lifespan()
+    yield
+    unit.end_lifespan()
+
+
+app = FastAPI(
+    docs_url='/docs',
+    redocs_url=None,
+    lifespan=lifespan,
+    openapi_url='/mast/api/v1/openapi.json')
+
 root = '/mast/api/v1/'
 
 
@@ -40,15 +62,8 @@ def do_item(subsystem: str, method: str, request: Request):
         return f'Invalid MAST subsystem \"{subsystem}\", valid ones: {", ".join([x.path for x in subsystems])}'
 
     sub = sub[0]
-    # api_methods = list()
-    api_method_names = list()
-    # inspect.getmembers returns (name, object) all_method_tuples
     all_method_tuples = inspect.getmembers(sub.obj, inspect.ismethod)
     api_method_tuples = [t for t in all_method_tuples if Mastapi.is_api_method(t[1])]
-    # for tup in all_method_tuples:
-    #     if Mastapi.is_api_method(tup[1]):
-    #         api_method_names.append(tup[0])
-    #         api_methods.append(tup[1])
     api_method_names = [t[0] for t in api_method_tuples]
     api_method_objects = [t[1] for t in api_method_tuples]
 
@@ -66,14 +81,8 @@ def do_item(subsystem: str, method: str, request: Request):
     for k, v in request.query_params.items():
         cmd += f"{k}={quote(v)}, "
     cmd = cmd.removesuffix(', ') + ')'
-    # try:
+
     return eval(cmd)
-    # except Exception as ex:
-    #     ret = ResultWithStatus()
-    #     ret.status = None
-    #     ret.error = ex
-    #     ret.result = None
-    #     return ret
 
 
 if __name__ == "__main__":

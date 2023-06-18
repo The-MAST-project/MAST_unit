@@ -4,6 +4,7 @@ by the HTTP API exposed by PWI4. This code can be called directly
 from other Python scripts, or can be adapted to other languages
 as needed.
 """
+import urllib.error
 
 try:
     # Python 3.x version
@@ -400,7 +401,7 @@ class PWI4:
         try:
             return self.comm.request(command, **kwargs)
         except Exception as ex:
-            raise
+            raise ex
 
     def request_with_status(self, command, **kwargs):
         response_text = self.request(command, **kwargs)
@@ -435,7 +436,6 @@ class PWI4:
     def parse_status(self, response_text):
         response_dict = self.status_text_to_dict(response_text)
         return PWI4Status(response_dict)
-    
 
     
 class Section(object): 
@@ -444,6 +444,7 @@ class Section(object):
     """
 
     pass
+
 
 class PWI4Status:
     """
@@ -468,7 +469,6 @@ class PWI4Status:
         # response.timestamp_utc was added in 4.0.9 beta 2
         self.response = Section()
         self.response.timestamp_utc = self.get_string("response.timestamp_utc")
-
 
         self.site = Section()
         self.site.latitude_degs = self.get_float("site.latitude_degs")
@@ -500,7 +500,6 @@ class PWI4Status:
         self.mount.distance_to_sun_degs = self.get_float("mount.distance_to_sun_degs")      # Added in 4.0.13
         self.mount.axis0_wrap_range_min_degs = self.get_float("mount.axis0_wrap_range_min_degs") # Added in 4.0.13
 
-
         self.mount.axis0 = Section()
         self.mount.axis1 = Section()
         self.mount.axis = [self.mount.axis0, self.mount.axis1]
@@ -530,7 +529,7 @@ class PWI4Status:
         self.mount.model.num_points_enabled = self.get_int("mount.model.num_points_enabled")
         self.mount.model.rms_error_arcsec = self.get_float("mount.model.rms_error_arcsec")
 
-        # mount.offests.* was added in PWI 4.0.11 Beta 5
+        # mount.offsets.* was added in PWI 4.0.11 Beta 5
         if "mount.offsets.ra_arcsec.total" not in self.raw:
             self.mount.offsets = None  # Offset reporting not supported by running version of PWI4
         else:
@@ -566,7 +565,6 @@ class PWI4Status:
             self.mount.offsets.transverse_arcsec.rate=self.get_float("mount.offsets.transverse_arcsec.rate")
             self.mount.offsets.transverse_arcsec.gradual_offset_progress=self.get_float("mount.offsets.transverse_arcsec.gradual_offset_progress")
 
-
         # mount.spiral_offset.* was added in PWI 4.0.11 Beta 8
         if "mount.spiral_offset.x" not in self.raw:
             self.mount.spiral_offset = None  # Offset reporting not supported by running version of PWI4
@@ -576,7 +574,6 @@ class PWI4Status:
             self.mount.spiral_offset.y = self.get_int("mount.spiral_offset.y")
             self.mount.spiral_offset.x_step_arcsec = self.get_float("mount.spiral_offset.x_step_arcsec")
             self.mount.spiral_offset.y_step_arcsec = self.get_float("mount.spiral_offset.y_step_arcsec")
-
 
         self.focuser = Section()
         self.focuser.exists = self.get_bool("focuser.exists", False) # Added in 4.0.99 Beta 2
@@ -603,7 +600,6 @@ class PWI4Status:
         self.autofocus.success = self.get_bool("autofocus.success")
         self.autofocus.best_position = self.get_float("autofocus.best_position")
         self.autofocus.tolerance = self.get_float("autofocus.tolerance")
-
 
     def get_bool(self, name, value_if_missing=None):
         if name not in self.raw:
@@ -641,6 +637,7 @@ class PWI4Status:
             lines.append(line_format % (key, value))
         return "\n".join(lines)
 
+
 class PWI4HttpCommunicator:
     """
     Manages communication with PWI4 via HTTP.
@@ -667,7 +664,7 @@ class PWI4HttpCommunicator:
 
         # For every keyword=value argument given to this function,
         # construct a string of the form "key1=val1&key2=val2".
-        keyword_values = list(kwargs.items()) # Need to explicitly convert this to list() for Python 3.x
+        keyword_values = list(kwargs.items())  # Need to explicitly convert this to list() for Python 3.x
         urlparams = urlencode(keyword_values)
 
         # In URLs, spaces can be encoded as "+" characters or as "%20".
@@ -703,6 +700,7 @@ class PWI4HttpCommunicator:
         # Open a connection to the server, issue the request, and try to receive the response.
         # The server will return an HTTP Status Code as part of the response.
         # If the status code indicates an error, an HTTPError will be thrown.
+        error_details = None
         try:
             response = urlopen(url, data=postdata, timeout=self.timeout_seconds)
         except HTTPError as e:
@@ -721,13 +719,15 @@ class PWI4HttpCommunicator:
             except:
                 pass # If that failed, we won't include any further details
             
-            raise Exception(error_message) # TODO: Consider a custom exception here
+            raise PWException(message=f'request: HTTPError: error_message={error_message}, error_details: {error_details}')
 
-            
+        except urllib.error.URLError:
+            raise PWException(message=f'request: Could not open the URL {url}.  Maybe PWI4 is not running !?!')
+
         except Exception as e:
             # This will often be a urllib2.URLError to indicate that a connection
             # could not be made to the server, but we'll handle any exception here
-            raise
+            raise PWException(message=f'request: got exception: {e}')
 
         payload = response.read()
         return payload
@@ -739,3 +739,9 @@ def list_to_comma_separated_string(value_list):
     """
 
     return ",".join([str(x) for x in value_list])
+
+
+class PWException(Exception):
+
+    def __init__(self, message=None):
+        super(PWException, self).__init__(message)
