@@ -5,8 +5,6 @@ from typing import TypeAlias
 from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log
 from power import Power, PowerState, SocketId
 
-logger = logging.getLogger('mast.unit.covers')
-init_log(logger)
 
 CoversStateType: TypeAlias = "CoversState"
 
@@ -42,23 +40,25 @@ class Covers(Activities):
     """
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
-
+    logger: logging.Logger
     ascom = None
     timer: RepeatTimer
     activities: Activities = CoverActivities.Idle
 
     def __init__(self, driver: str):
+        self.logger = logging.getLogger('mast.unit.covers')
+        init_log(self.logger)
         try:
             self.ascom = win32com.client.Dispatch(driver)
         except Exception as ex:
-            logger.exception(ex)
+            self.logger.exception(ex)
             raise ex
 
         self.timer = RepeatTimer(2, self.ontimer)
         self.timer.name = 'covers-timer'
         self.timer.start()
 
-        logger.info('initialized')
+        self.logger.info('initialized')
 
     @property
     def is_powered(self):
@@ -133,8 +133,8 @@ class Covers(Activities):
         if not self.connected:
             return
 
-        logger.info('opening covers')
-        self.start_activity(CoverActivities.Opening, logger)
+        self.logger.info('opening covers')
+        self.start_activity(CoverActivities.Opening, self.logger)
         self.ascom.OpenCover()
 
     @return_with_status
@@ -146,8 +146,8 @@ class Covers(Activities):
         if not self.connected:
             return
 
-        logger.info('closing covers')
-        self.start_activity(CoverActivities.Closing, logger)
+        self.logger.info('closing covers')
+        self.start_activity(CoverActivities.Closing, self.logger)
         self.ascom.CloseCover()
 
     @return_with_status
@@ -162,7 +162,7 @@ class Covers(Activities):
         if not self.connected:
             self.connect()
         if self.state() != CoversState.Open:
-            self.start_activity(CoverActivities.StartingUp, logger)
+            self.start_activity(CoverActivities.StartingUp, self.logger)
             self.open()
 
     @return_with_status
@@ -175,7 +175,7 @@ class Covers(Activities):
         if not self.connected:
             return
 
-        self.start_activity(CoverActivities.ShuttingDown, logger)
+        self.start_activity(CoverActivities.ShuttingDown, self.logger)
         if self.state() != CoversState.Closed:
             self.close()
 
@@ -184,12 +184,12 @@ class Covers(Activities):
             return
 
         if self.is_active(CoverActivities.Opening) and self.state() == CoversState.Open:
-            self.end_activity(CoverActivities.Opening, logger)
+            self.end_activity(CoverActivities.Opening, self.logger)
             if self.is_active(CoverActivities.StartingUp):
-                self.end_activity(CoverActivities.StartingUp, logger)
+                self.end_activity(CoverActivities.StartingUp, self.logger)
 
         if self.is_active(CoverActivities.Closing) and self.state() == CoversState.Closed:
-            self.end_activity(CoverActivities.Closing, logger)
+            self.end_activity(CoverActivities.Closing, self.logger)
             if self.is_active(CoverActivities.ShuttingDown):
-                self.end_activity(CoverActivities.ShuttingDown, logger)
+                self.end_activity(CoverActivities.ShuttingDown, self.logger)
                 Power.power(SocketId('Covers'), PowerState.Off)

@@ -8,9 +8,6 @@ from PlaneWave import pwi4_client
 
 FocuserType: TypeAlias = "Focuser"
 
-logger = logging.getLogger('mast.unit.focuser')
-init_log(logger)
-
 
 class FocuserActivities(Flag):
     Idle = 0
@@ -51,21 +48,24 @@ class FocuserStatus:
 
 class Focuser(Activities):
 
+    logger: logging.Logger
     pw: pwi4_client
     activities: FocuserActivities = FocuserActivities.Idle
     timer: RepeatTimer
 
     def __init__(self, driver: str):
+        self.logger = logging.getLogger('mast.unit.focuser')
+        init_log(self.logger)
         try:
             self.ascom = win32com.client.Dispatch(driver)
         except Exception as ex:
-            logger.exception(ex)
+            self.logger.exception(ex)
             raise ex
         self.pw = pwi4_client.PWI4()
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'focuser-timer'
         self.timer.start()
-        logger.info('initialized')
+        self.logger.info('initialized')
 
     @property
     def is_powered(self):
@@ -141,22 +141,22 @@ class Focuser(Activities):
         :param int position: Target position
         """
         if not self.is_powered:
-            logger.info('Cannot goto - not-powered')
+            self.logger.info('Cannot goto - not-powered')
             return
         if not self.connected:
-            logger.info('Cannot goto - not-connected')
+            self.logger.info('Cannot goto - not-connected')
             return
 
         if isinstance(position, str):
             position = int(position)
-        self.start_activity(FocuserActivities.Moving, logger)
+        self.start_activity(FocuserActivities.Moving, self.logger)
         self.pw.focuser_goto(position)
 
     def ontimer(self):
         stat = self.pw.status()
 
         if self.is_active(FocuserActivities.Moving) and not stat.focuser.is_moving:
-            self.end_activity(FocuserActivities.Moving, logger)
+            self.end_activity(FocuserActivities.Moving, self.logger)
 
     def status(self) -> FocuserStatus:
         """

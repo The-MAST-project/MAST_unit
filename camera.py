@@ -5,13 +5,13 @@ import astropy.units as u
 from enum import Flag, Enum
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, init_log
 from power import Power, PowerState, SocketId
-from utils import Activities
+from utils import Activities, init_log
 
 CameraType: TypeAlias = "Camera"
 
-logger = logging.getLogger('mast.unit.camera')
-logger.setLevel(logging.DEBUG)
-init_log(logger)
+# logger = logging.getLogger('mast.unit.camera')
+# self.logger.setLevel(logging.DEBUG)
+# init_log(logger)
 
 
 class CameraState(Enum):
@@ -74,6 +74,7 @@ class CameraStatus:
 
 class Camera(Activities):
 
+    logger: logging.Logger
     _connected: bool = False
     _is_exposing: bool = False
     operational_set_point = -25
@@ -93,17 +94,18 @@ class Camera(Activities):
     last_state: CameraState = None
 
     def __init__(self, driver: str, set_point: float = None):
-        logger.setLevel(level=logging.DEBUG)
+        self.logger = logging.getLogger('mast.unit.camera')
+        init_log(self.logger)
         try:
             self.ascom = win32com.client.Dispatch(driver)
         except Exception as ex:
-            logger.exception(ex)
+            self.logger.exception(ex)
             raise ex
 
         self.timer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'camera-timer'
         self.timer.start()
-        logger.info('initialized')
+        self.logger.info('initialized')
 
     @property
     def connected(self) -> bool:
@@ -123,7 +125,7 @@ class Camera(Activities):
             self.NumY = self.ascom.NumY
             self.RadX = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
             self.RadY = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
-        logger.info(f'connected = {value}')
+        self.logger.info(f'connected = {value}')
 
     @property
     def is_powered(self):
@@ -165,13 +167,13 @@ class Camera(Activities):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(CameraActivities.Exposing, logger)
+            self.start_activity(CameraActivities.Exposing, self.logger)
             self.image = None
 
             # readout mode, binning, gain?
 
             self.ascom.StartExposure(seconds, True)
-            logger.info(f'exposure started (seconds={seconds})')
+            self.logger.info(f'exposure started (seconds={seconds})')
 
     @return_with_status
     def abort_exposure(self):
@@ -187,10 +189,10 @@ class Camera(Activities):
             try:
                 self.ascom.AbortExposure()
             except Exception as ex:
-                logger .exception(f'failed to stop exposure', ex)
+                self.logger .exception(f'failed to stop exposure', ex)
         else:
-            logger.info(f'ASCOM camera "{self.ascom.Name}" cannot stop exposure')
-        self.end_activity(CameraActivities.Exposing, logger)
+            self.logger.info(f'ASCOM camera "{self.ascom.Name}" cannot stop exposure')
+        self.end_activity(CameraActivities.Exposing, self.logger)
 
     @return_with_status
     def stop_exposure(self):
@@ -238,14 +240,14 @@ class Camera(Activities):
         if not self.ascom.Connected:
             return
 
-        self.start_activity(CameraActivities.CoolingDown, logger)
+        self.start_activity(CameraActivities.CoolingDown, self.logger)
         # Turn on cooler
         if not self.ascom.CoolerOn:
-            logger.info(f'cool-down: cooler ON')
+            self.logger.info(f'cool-down: cooler ON')
             self.ascom.CoolerOn = True
 
         if self.ascom.CanSetCCDTemperature:
-            logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
+            self.logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
             self.ascom.SetCCDTemperature = self.operational_set_point
 
     @return_with_status
@@ -256,7 +258,7 @@ class Camera(Activities):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(CameraActivities.ShuttingDown, logger)
+            self.start_activity(CameraActivities.ShuttingDown, self.logger)
             if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
                 self.warmup()
 
@@ -269,10 +271,10 @@ class Camera(Activities):
             return
 
         if self.ascom.CanSetCCDTemperature:
-            self.start_activity(CameraActivities.WarmingUp, logger)
+            self.start_activity(CameraActivities.WarmingUp, self.logger)
             temp = self.ascom.CCDTemperature
 
-            logger.info(f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
+            self.logger.info(f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
             self.ascom.SetCCDTemperature(self.warm_set_point)
 
     def ontimer(self):
@@ -284,7 +286,7 @@ class Camera(Activities):
 
         if self.last_state is None:
             self.last_state = self.ascom.CameraState
-            logger.info(f'state changed from None to {CameraState(self.last_state)}')
+            self.logger.info(f'state changed from None to {CameraState(self.last_state)}')
         else:
             state = self.ascom.CameraState
             if not state == self.last_state:
@@ -292,27 +294,27 @@ class Camera(Activities):
                 if state == CameraState.Exposing or state == CameraState.Waiting or state == CameraState.Reading or \
                         state == CameraState.Download:
                     percent = f'{self.ascom.PercentCompleted} %'
-                logger.info(f'state changed from {CameraState(self.last_state)} to {CameraState(state)} {percent}')
+                self.logger.info(f'state changed from {CameraState(self.last_state)} to {CameraState(state)} {percent}')
                 self.last_state = state
 
         if self.is_active(CameraActivities.Exposing) and self.ascom.ImageReady:
             self.image = self.ascom.ImageArray
-            logger.info(f'image acquired (shutter was open for {self.ascom.LastExposureDuration} seconds)')
-            self.end_activity(CameraActivities.Exposing, logger)
+            self.logger.info(f'image acquired (shutter was open for {self.ascom.LastExposureDuration} seconds)')
+            self.end_activity(CameraActivities.Exposing, self.logger)
 
         if self.is_active(CameraActivities.CoolingDown):
             temp = self.ascom.CCDTemperature
             if temp <= self.operational_set_point:
-                self.end_activity(CameraActivities.CoolingDown, logger)
-                self.end_activity(CameraActivities.StartingUp, logger)
-                logger.info(f'cool-down: done (temperature={temp:.1f}, set-point={self.operational_set_point})')
+                self.end_activity(CameraActivities.CoolingDown, self.logger)
+                self.end_activity(CameraActivities.StartingUp, self.logger)
+                self.logger.info(f'cool-down: done (temperature={temp:.1f}, set-point={self.operational_set_point})')
 
         if self.is_active(CameraActivities.WarmingUp):
             temp = self.ascom.CCDTemperature
             if temp >= self.warm_set_point:
                 self.ascom.CoolerOn = False
-                logger.info('turned cooler OFF')
-                self.end_activity(CameraActivities.WarmingUp, logger)
-                self.end_activity(CameraActivities.ShuttingDown, logger)
-                logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')
+                self.logger.info('turned cooler OFF')
+                self.end_activity(CameraActivities.WarmingUp, self.logger)
+                self.end_activity(CameraActivities.ShuttingDown, self.logger)
+                self.logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')
                 Power.power(SocketId('Camera'), PowerState.Off)

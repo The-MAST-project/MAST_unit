@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 unit_id = 17
 logger = logging.Logger('mast')
+logger.setLevel(logging.DEBUG)
 init_log(logger)
 unit = None
 pw = None
@@ -27,7 +28,7 @@ if not unit:
 
 @asynccontextmanager
 async def lifespan(fast_app: FastAPI):
-    Unit.start_lifespan()
+    unit.start_lifespan()
     yield
     unit.end_lifespan()
 

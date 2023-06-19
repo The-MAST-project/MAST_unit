@@ -133,6 +133,7 @@ class DailyFileHandler(logging.FileHandler):
 
 
 def init_log(logger: logging.Logger):
+    logger.propagate = False
     logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
@@ -144,8 +145,6 @@ def init_log(logger: logging.Logger):
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-
-    logger.info('initialized')
 
 
 def is_mastapi(func):
@@ -218,16 +217,20 @@ class Subsystem:
         self.obj_name = obj_name
 
 
-def parse_params(memory: shared_memory.SharedMemory) -> dict:
+def parse_params(memory: shared_memory.SharedMemory, logger=logging.Logger) -> dict:
     bytes_array = bytearray(memory.buf)
     string_array = bytes_array.decode(encoding='utf-8')
     data = string_array[:string_array.find('\x00')]
+    logger.info(f"data: '{data}'")
 
     matches = re.findall(r'(\w+(?:\(\d+\))?)\s*=\s*(.*?)(?=(!|$|\w+(\(\d+\))?\s*=))', data)
     d = {}
     for match in matches:
-        values = match[1].strip()
-        d[match[0]] = re.split(r' (?![A-Za-z])', values)
+        key = match[0]
+        value = match[1].strip()
+        logger.info(f"key={match[0]}, value='{value}'")
+        # d[match[0]] = re.split(r' (?![A-Za-z])', values)
+        d[key] = value
     return d
 
 

@@ -8,9 +8,6 @@ from enum import Flag
 from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log
 from power import Power, PowerState, SocketId
 
-logger = logging.getLogger('mast.unit.mount')
-logger.setLevel(logging.DEBUG)
-init_log(logger)
 
 MountType: TypeAlias = "Mount"
 
@@ -67,6 +64,7 @@ class MountStatus:
 
 class Mount(Activities):
 
+    logger: logging.Logger
     pw: pwi4_client
     activities: MountActivity = MountActivity.Idle
     timer: RepeatTimer
@@ -74,12 +72,14 @@ class Mount(Activities):
     last_axis1_position_degrees: int = -99999
 
     def __init__(self):
+        self.logger = logging.getLogger('mast.unit.mount')
+        init_log(self.logger)
         self.pw = pwi4_client.PWI4()
         self.ascom = win32com.client.Dispatch('ASCOM.PWI4.Telescope')
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'mount-timer'
         self.timer.start()
-        logger.info('initialized')
+        self.logger.info('initialized')
 
     @property
     def is_powered(self):
@@ -123,16 +123,16 @@ class Mount(Activities):
                 if not st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
                     self.pw.mount_enable(0)
                     self.pw.mount_enable(1)
-                logger.info(f'connected = {value}, axes enabled, fans on')
+                self.logger.info(f'connected = {value}, axes enabled, fans on')
             else:
                 if st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
                     st.pw.mount_disable()
                 st.pw.mount_disconnect()
                 self.pw.request('/fans/off')
                 self.ascom.Connected = False
-                logger.info(f'connected = {value}, axes disabled, disconnected, fans off')
+                self.logger.info(f'connected = {value}, axes disabled, disconnected, fans off')
         except Exception as ex:
-            logger.exception(ex)
+            self.logger.exception(ex)
 
     @return_with_status
     def startup(self):
@@ -144,7 +144,7 @@ class Mount(Activities):
             Power.power(SocketId('Mount'), PowerState.On)
         if not self.connected:
             self.connect()
-        self.start_activity(MountActivity.StartingUp, logger)
+        self.start_activity(MountActivity.StartingUp, self.logger)
         self.pw.request('/fans/on')
         self.find_home()
 
@@ -156,7 +156,7 @@ class Mount(Activities):
         """
         if not self.connected:
             self.connect()
-        self.start_activity(MountActivity.ShuttingDown, logger)
+        self.start_activity(MountActivity.ShuttingDown, self.logger)
         self.pw.request('/fans/off')
         self.park()
         Power.power(SocketId('Mount'), PowerState.Off)
@@ -168,7 +168,7 @@ class Mount(Activities):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(MountActivity.Parking, logger)
+            self.start_activity(MountActivity.Parking, self.logger)
             self.pw.mount_park()
 
     @return_with_status
@@ -178,7 +178,7 @@ class Mount(Activities):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(MountActivity.FindingHome, logger)
+            self.start_activity(MountActivity.FindingHome, self.logger)
             self.last_axis0_position_degrees = -99999
             self.last_axis1_position_degrees = -99999
             self.pw.mount_find_home()
@@ -190,15 +190,15 @@ class Mount(Activities):
         status = self.pw.status()
         if self.is_active(MountActivity.FindingHome):
             if not status.mount.is_slewing:
-                self.end_activity(MountActivity.FindingHome, logger)
+                self.end_activity(MountActivity.FindingHome, self.logger)
                 if self.is_active(MountActivity.StartingUp):
-                    self.end_activity(MountActivity.StartingUp, logger)
+                    self.end_activity(MountActivity.StartingUp, self.logger)
 
         if self.is_active(MountActivity.Parking):
             if not status.mount.is_slewing:
-                self.end_activity(MountActivity.Parking, logger)
+                self.end_activity(MountActivity.Parking, self.logger)
                 if self.is_active(MountActivity.ShuttingDown):
-                    self.end_activity(MountActivity.ShuttingDown, logger)
+                    self.end_activity(MountActivity.ShuttingDown, self.logger)
 
     def status(self) -> MountStatus:
         """

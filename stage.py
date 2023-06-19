@@ -7,9 +7,6 @@ from typing import TypeAlias
 from mastapi import Mastapi
 from power import Power, PowerState, SocketId
 
-logger = logging.getLogger('mast.unit.stage')
-init_log(logger)
-
 StageStateType: TypeAlias = "StageState"
 
 
@@ -65,6 +62,7 @@ class Stage(Mastapi, Activities):
     TICKS_WHEN_OUT = 30000
     TICKS_PER_SECOND = 1000
 
+    logger: logging.Logger
     _connected: bool
     _position: int = 0
     state: StageState
@@ -76,6 +74,8 @@ class Stage(Mastapi, Activities):
     activities: StageActivities
 
     def __init__(self):
+        self.logger = logging.getLogger('mast.unit.stage')
+        init_log(self.logger)
         self.state = StageState.Idle
         self._connected = False
 
@@ -83,7 +83,7 @@ class Stage(Mastapi, Activities):
         self.timer.name = 'mast.stage'
         self.timer.start()
         self.activities = StageActivities.Idle
-        logger.info('initialized')
+        self.logger.info('initialized')
 
     @property
     def is_powered(self):
@@ -109,12 +109,12 @@ class Stage(Mastapi, Activities):
                 self.position = self.TICKS_WHEN_IN
 
             except Exception as ex:
-                logger.exception(ex)
+                self.logger.exception(ex)
                 self.state = StageState.Error
                 raise ex
 
         self._connected = value
-        logger.info(f'connected = {value}')
+        self.logger.info(f'connected = {value}')
 
     @return_with_status
     def connect(self):
@@ -151,7 +151,7 @@ class Stage(Mastapi, Activities):
         if not self.connected:
             self.connect()
         if self.state is not StageState.Science:
-            self.start_activity(StageActivities.StaringUp, logger)
+            self.start_activity(StageActivities.StaringUp, self.logger)
             self.move(StageState.Science)
 
     @return_with_status
@@ -165,7 +165,7 @@ class Stage(Mastapi, Activities):
             return
 
         if not self.state == StageState.Guiding:
-            self.start_activity(StageActivities.ShuttingDown, logger)
+            self.start_activity(StageActivities.ShuttingDown, self.logger)
             self.move(StageState.Guiding)
         self.disconnect()
         Power.power(SocketId('Stage'), PowerState.Off)
@@ -219,20 +219,20 @@ class Stage(Mastapi, Activities):
                 if pos > self.TICKS_WHEN_OUT:
                     pos = self.TICKS_WHEN_OUT
                     self.state = StageState.Out
-                    self.end_activity(StageActivities.Moving, logger)
+                    self.end_activity(StageActivities.Moving, self.logger)
             else:
                 pos = self.ticks_at_start - dt * self.TICKS_PER_SECOND
                 if pos <= self.TICKS_WHEN_IN:
                     pos = self.TICKS_WHEN_IN
                     self.state = StageState.In
-                    self.end_activity(StageActivities.Moving, logger)
+                    self.end_activity(StageActivities.Moving, self.logger)
 
             self.position = pos
             if self.is_active(StageActivities.StaringUp) and self.state == StageState.In:
-                self.end_activity(StageActivities.StaringUp, logger)
+                self.end_activity(StageActivities.StaringUp, self.logger)
             if self.is_active(StageActivities.ShuttingDown) and self.state == StageState.Out:
-                self.end_activity(StageActivities.ShuttingDown, logger)
-            logger.info(f'ontimer: position={self.position}')
+                self.end_activity(StageActivities.ShuttingDown, self.logger)
+            self.logger.info(f'ontimer: position={self.position}')
 
     @return_with_status
     def move(self, where: StageState | str):
@@ -247,11 +247,11 @@ class Stage(Mastapi, Activities):
         if isinstance(where, str):
             where = StageState(stage_state_str2int_dict[where])
         if self.state == where:
-            logger.info(f'move: already {where}')
+            self.logger.info(f'move: already {where}')
             return
 
-        self.start_activity(StageActivities.Moving, logger)
+        self.start_activity(StageActivities.Moving, self.logger)
         self.state = StageState.MovingIn if where == StageState.In else StageState.MovingOut
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
-        logger.info(f'move: at {self.position} started moving, state={self.state}')
+        self.logger.info(f'move: at {self.position} started moving, state={self.state}')

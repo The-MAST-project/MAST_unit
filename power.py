@@ -80,10 +80,13 @@ class PowerStatus:
                 self.is_operational = False
                 self.reasons.append(f'socket[{socket.id.name}] is OFF')
 
-ip_address: str = ''
+        ip_address: str = ''
 
 
 class Power:
+
+    def __init__(self):
+        pass
 
     @staticmethod
     @return_with_status

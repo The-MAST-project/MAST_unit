@@ -10,6 +10,7 @@
 import os.path
 import time
 
+import numpy as np
 from semaphore_win_ctypes import Semaphore
 from multiprocessing.shared_memory import SharedMemory
 from time import sleep
@@ -49,23 +50,30 @@ class ImageCounter:
 image_counter = ImageCounter()
 
 
-def solve_image():
-    if 'ra' in image_params_dict.keys() and 'dec' in image_params_dict.keys():
-        ra = float(image_params_dict['ra'])
-        dec = float(image_params_dict['dec'])
+def solve_image(params: dict):
+    if 'ra' in params.keys() and 'dec' in params.keys():
+        ra = float(params['ra'])
+        dec = float(params['dec'])
         d = {
             'solved': True,
             'ra': ra,
             'dec': dec,
         }
         store_params(results_shm, d)
-        hdu = fits.hdu.PrimaryHDU()
-        hdu.header['NumX'] = int(image_params_dict['NumX'])
-        hdu.header['NumY'] = int(image_params_dict['NumY'])
-        hdu.data = image_shm.buf
+        NumX = int(params['NumX'])
+        NumY = int(params['NumY'])
+        image = np.ndarray((NumX, NumY), dtype=np.uint32, buffer=image_shm.buf)
+        hdu = fits.hdu.PrimaryHDU(image)
+        hdu.header['NAXIS1'] = NumX
+        hdu.header['NAXIS2'] = NumY
+        hdu.header['RA'] = ra
+        hdu.header['DEC'] = dec
+
         counter = image_counter.value
-        hdu.writeto(os.path.join(image_dir, f'image-{counter}.fits'))
+        os.makedirs('images', exist_ok=True)
         image_counter.value = counter + 1
+
+        hdu.writeto(os.path.join(image_dir, f'image-{counter}.fits'))
         print(f'solved image: ra={ra} dec={dec}')
 
 
@@ -123,10 +131,15 @@ if __name__ == '__main__':
             # wait for the guider software to acquire the image and place it in the shared segment
             semaphore.acquire(timeout_ms=None)
             logger.info(f"semaphore acquired")
-            image_param_dict = parse_params(image_params_shm)
-            solve_image()
+            image_param_dict = parse_params(image_params_shm, logger)
+            if not image_param_dict:
+                semaphore.release()
+                continue
+
+            solve_image(image_param_dict)
             # let the guiding software know that the results are available
             semaphore.release()
             logger.info(f"semaphore released")
+            time.sleep(1)
         except Exception as e:
             logger.error('exception: ', e)
