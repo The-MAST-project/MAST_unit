@@ -3,7 +3,7 @@ import logging
 from enum import Enum, Flag
 from typing import TypeAlias
 from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log
-from power import Power, PowerState, SocketId
+from powered_device import PoweredDevice
 
 
 CoversStateType: TypeAlias = "CoversState"
@@ -36,7 +36,7 @@ class CoversState(Enum):
     Error = 5
 
 
-class Covers(Activities):
+class Covers(Activities, PoweredDevice):
     """
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
@@ -54,15 +54,13 @@ class Covers(Activities):
             self.logger.exception(ex)
             raise ex
 
+        PoweredDevice.__init__(self, 'Covers', self)
+
         self.timer = RepeatTimer(2, self.ontimer)
-        self.timer.name = 'covers-timer'
+        self.timer.name = 'covers-timer-thread'
         self.timer.start()
 
         self.logger.info('initialized')
-
-    @property
-    def is_powered(self):
-        return Power.is_on(SocketId('Covers'))
 
     def connect(self):
         """
@@ -158,7 +156,7 @@ class Covers(Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power(SocketId('Covers'), PowerState.On)
+            self.power_on()
         if not self.connected:
             self.connect()
         if self.state() != CoversState.Open:
@@ -192,4 +190,4 @@ class Covers(Activities):
             self.end_activity(CoverActivities.Closing, self.logger)
             if self.is_active(CoverActivities.ShuttingDown):
                 self.end_activity(CoverActivities.ShuttingDown, self.logger)
-                Power.power(SocketId('Covers'), PowerState.Off)
+                self.power_off()

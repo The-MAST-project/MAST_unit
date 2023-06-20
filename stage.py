@@ -5,7 +5,7 @@ import datetime
 from utils import RepeatTimer, return_with_status, Activities, init_log
 from typing import TypeAlias
 from mastapi import Mastapi
-from power import Power, PowerState, SocketId
+from powered_device import PoweredDevice
 
 StageStateType: TypeAlias = "StageState"
 
@@ -54,7 +54,7 @@ class StageState(Enum):
     Guiding = Out
 
 
-class Stage(Mastapi, Activities):
+class Stage(Mastapi, Activities, PoweredDevice):
 
     MIN_TICKS = 0
     MAX_TICKS = 50000
@@ -76,18 +76,17 @@ class Stage(Mastapi, Activities):
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
         init_log(self.logger)
+
+        PoweredDevice.__init__(self, 'Stage', self)
+
         self.state = StageState.Idle
         self._connected = False
 
         self.timer = RepeatTimer(1, function=self.ontimer)
-        self.timer.name = 'mast.stage'
+        self.timer.name = 'stage-timer-thread'
         self.timer.start()
         self.activities = StageActivities.Idle
         self.logger.info('initialized')
-
-    @property
-    def is_powered(self):
-        return Power.is_on(SocketId('Stage'))
 
     @property
     def connected(self) -> bool:
@@ -147,7 +146,7 @@ class Stage(Mastapi, Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power(SocketId('Stage'), PowerState.On)
+            self.power_on()
         if not self.connected:
             self.connect()
         if self.state is not StageState.Science:
@@ -168,7 +167,7 @@ class Stage(Mastapi, Activities):
             self.start_activity(StageActivities.ShuttingDown, self.logger)
             self.move(StageState.Guiding)
         self.disconnect()
-        Power.power(SocketId('Stage'), PowerState.Off)
+        self.power_off()
 
     @property
     def position(self) -> int:

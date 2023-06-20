@@ -6,7 +6,7 @@ from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
 from utils import Subsystem
 from typing import Union
-from power import Socket, SocketId
+from powered_device import Socket, SocketId
 
 
 class TypeToSchema:

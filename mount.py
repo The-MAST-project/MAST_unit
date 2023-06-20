@@ -6,7 +6,7 @@ from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
 from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log
-from power import Power, PowerState, SocketId
+from powered_device import PoweredDevice
 
 
 MountType: TypeAlias = "Mount"
@@ -62,7 +62,7 @@ class MountStatus:
             self.reasons.append('not-connected')
 
 
-class Mount(Activities):
+class Mount(Activities, PoweredDevice):
 
     logger: logging.Logger
     pw: pwi4_client
@@ -74,16 +74,15 @@ class Mount(Activities):
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.mount')
         init_log(self.logger)
+
+        PoweredDevice.__init__(self, 'Mount', self)
+
         self.pw = pwi4_client.PWI4()
         self.ascom = win32com.client.Dispatch('ASCOM.PWI4.Telescope')
         self.timer = RepeatTimer(2, function=self.ontimer)
-        self.timer.name = 'mount-timer'
+        self.timer.name = 'mount-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
-
-    @property
-    def is_powered(self):
-        return Power.is_on(SocketId('Mount'))
 
     @return_with_status
     def connect(self):
@@ -141,7 +140,7 @@ class Mount(Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power(SocketId('Mount'), PowerState.On)
+            self.power_on()
         if not self.connected:
             self.connect()
         self.start_activity(MountActivity.StartingUp, self.logger)
@@ -159,7 +158,7 @@ class Mount(Activities):
         self.start_activity(MountActivity.ShuttingDown, self.logger)
         self.pw.request('/fans/off')
         self.park()
-        Power.power(SocketId('Mount'), PowerState.Off)
+        self.power_off()
 
     @return_with_status
     def park(self):

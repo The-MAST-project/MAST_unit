@@ -11,7 +11,7 @@ import covers
 import stage
 import mount
 import focuser
-from power import Power, PowerStatus, PowerState, SocketId
+from powered_device import PowerStatus,SocketId, PoweredDevice
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -22,16 +22,12 @@ from enum import Flag
 from threading import Thread
 from semaphore_win_ctypes import Semaphore
 from multiprocessing.shared_memory import SharedMemory
-from utils import parse_params, ensure_process_is_running, store_params, init_log
+from utils import parse_params, ensure_process_is_running, store_params
 from camera import CameraActivities
 import os
 import subprocess
 
 UnitType: TypeAlias = "Unit"
-
-# logger = logging.getLogger('mast.unit')
-# self.logger.setLevel(logging.DEBUG)
-# init_log(logger)
 
 
 class UnitActivities(Flag):
@@ -54,7 +50,7 @@ class UnitStatus:
     activities: UnitActivities
 
     def __init__(self, unit: UnitType):
-        self.power = Power.status()
+        self.power = PoweredDevice.status()
         self.camera = unit.camera.status() if unit.camera is not None else None
         self.stage = unit.stage.status() if unit.stage is not None else None
         self.covers = unit.covers.status() if unit.covers is not None else None
@@ -153,7 +149,7 @@ class Unit(Activities):
             raise ex
 
         self.timer = RepeatTimer(2, function=self.ontimer)
-        self.timer.name = 'unit-timer'
+        self.timer.name = 'unit-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
 
@@ -178,7 +174,7 @@ class Unit(Activities):
         if self.is_active(UnitActivities.StartingUp):
             return
 
-        Thread(name='startup', target=self.do_startup).start()
+        Thread(name='startup-thread', target=self.do_startup).start()
 
     def do_shutdown(self):
         self.start_activity(UnitActivities.ShuttingDown, self.logger)
@@ -201,7 +197,7 @@ class Unit(Activities):
         if self.is_active(UnitActivities.ShuttingDown):
             return
 
-        Thread(name='shutdown', target=self.do_shutdown).start()
+        Thread(name='shutdown-thread', target=self.do_shutdown).start()
 
     @property
     def connected(self):
@@ -363,9 +359,8 @@ class Unit(Activities):
             self.logger.info(f'guiding exposure done, getting the image from the camera')
             if not self.image_shm:
                 self.image_shm = SharedMemory(name='PlateSolving_Image', create=True,
-                                              size=(self.camera.NumY * self.camera.NumX * 4))
-            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY),
-                                      dtype=np.uint32, buffer=self.image_shm.buf)
+                                              size=(self.camera.NumX * self.camera.NumY * 4))
+            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=np.uint32, buffer=self.image_shm.buf)
             shared_image[:] = self.camera.image[:]
             self.logger.info(f'copied image to shared memory')
 
@@ -402,30 +397,32 @@ class Unit(Activities):
 
             self.logger.info('parsing plate solving result')
             results = parse_params(self.results_shm, self.logger)
-            self.release_semaphore()
 
-            if 'succeeded' not in results.keys() or not results['succeeded']:
-                self.logger.warning(f"plate solving failed")
-                # TODO: what do we do?  try again?  bail out?
+            if 'solved' in results.keys() and bool(results['solved']):
+                self.logger.info(f"plate solving succeeded")
+                solved_ra = float(results['ra'])
+                solved_dec = float(results['dec'])
 
-            if last_ra == -1 or last_dec == -1:  # first time?
-                last_ra = results['ra']
-                last_dec = results['dec']
-                continue
+                if last_ra != -1 and last_dec != -1:
+                    delta_ra = solved_ra - last_ra      # mind sign and mount offset direction
+                    delta_dec = solved_dec - last_dec   # ditto
 
-            delta_ra = results['ra'] - last_ra      # mind sign and mount offset direction
-            delta_dec = results['dec'] - last_dec   # ditto
+                    # tell the mount to correct by (delta_ra, delta_dec)
+                    # Angle(delta_ra * u.deg).value.tostring(decimal=False)
+                    self.logger.info(f'TODO: telling mount to correct by ra={delta_ra}, dec={delta_dec} ...')
+                    self.pw.mount_goto_ra_dec_j2000(ra + delta_ra, dec + delta_dec)
+                    while True:
+                        pw_status = self.pw.status()
+                        if not pw_status.mount.is_slewing:
+                            break
+                        self.logger.info(f'waiting for mount to stop slewing ...')
+                        time.sleep(1)
+                    self.logger.info(f'mount stopped slewing')
 
-            # tell the mount to correct by (delta_ra, delta_dec)
-            self.logger.info(f'TODO: telling mount to correct by ra={delta_ra}, dec={delta_dec} ...')
-            self.pw.mount_goto_ra_dec_j2000(ra + delta_ra, dec + delta_dec)
-            pw_status = self.pw.status()
-            while pw_status.mount.is_slewing:
-                self.logger.info(f'waiting for mount to stop slewing ...')
-                time.sleep(1)
+                last_ra = solved_ra
+                last_dec = solved_dec
 
-            self.logger.info(f'mount stopped slewing')
-
+            self.logger.info(f"done solving cycle, sleeping {self.GUIDING_INTER_EXPOSURE_SECONDS} seconds ...")
             # avoid sleeping for a long time, for better agility at sensing that guiding was stopped
             td = datetime.timedelta(seconds=self.GUIDING_INTER_EXPOSURE_SECONDS)
             start = datetime.datetime.now()
@@ -456,7 +453,7 @@ class Unit(Activities):
             self.logger.info('started mount tracking')
 
         self.start_activity(UnitActivities.Guiding, self.logger)
-        Thread(name='guiding', target=self.do_guide).start()
+        Thread(name='guiding-thread', target=self.do_guide).start()
 
     @return_with_status
     def stop_guiding(self):
@@ -497,7 +494,7 @@ class Unit(Activities):
 
         :mastapi:
         """
-        Power.all_on()
+        PoweredDevice.all_on()
 
     @return_with_status
     def power_all_off(self):
@@ -506,7 +503,7 @@ class Unit(Activities):
 
         :mastapi:
         """
-        Power.all_off()
+        PoweredDevice.all_off()
 
     @return_with_status
     def power_on(self, socket_id: SocketId | str):
@@ -521,7 +518,8 @@ class Unit(Activities):
         """
         if isinstance(socket_id, str):
             socket_id = SocketId(socket_id)
-        Power.power(socket_id, PowerState.On)
+        sock = PoweredDevice(socket_name=socket_id.name)
+        sock.power_on()
 
     @return_with_status
     def power_off(self, socket_id: SocketId | str):
@@ -536,7 +534,8 @@ class Unit(Activities):
         """
         if isinstance(socket_id, str):
             socket_id = SocketId(socket_id)
-        Power.power(socket_id, PowerState.Off)
+        sock = PoweredDevice(socket_name=socket_id.name)
+        sock.power_off()
 
     def status(self) -> UnitStatus:
         """

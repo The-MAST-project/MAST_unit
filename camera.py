@@ -3,15 +3,11 @@ from typing import TypeAlias
 import logging
 import astropy.units as u
 from enum import Flag, Enum
-from utils import AscomDriverInfo, RepeatTimer, return_with_status, init_log
-from power import Power, PowerState, SocketId
+from utils import AscomDriverInfo, RepeatTimer, return_with_status
+from powered_device import PoweredDevice
 from utils import Activities, init_log
 
 CameraType: TypeAlias = "Camera"
-
-# logger = logging.getLogger('mast.unit.camera')
-# self.logger.setLevel(logging.DEBUG)
-# init_log(logger)
 
 
 class CameraState(Enum):
@@ -72,7 +68,7 @@ class CameraStatus:
         self.activities_verbal = self.activities.name
 
 
-class Camera(Activities):
+class Camera(Activities, PoweredDevice):
 
     logger: logging.Logger
     _connected: bool = False
@@ -102,8 +98,10 @@ class Camera(Activities):
             self.logger.exception(ex)
             raise ex
 
+        PoweredDevice.__init__(self, 'Camera', self)
+
         self.timer = RepeatTimer(1, function=self.ontimer)
-        self.timer.name = 'camera-timer'
+        self.timer.name = 'camera-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
 
@@ -126,10 +124,6 @@ class Camera(Activities):
             self.RadX = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
             self.RadY = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         self.logger.info(f'connected = {value}')
-
-    @property
-    def is_powered(self):
-        return Power.is_on(SocketId('Camera'))
 
     @return_with_status
     def connect(self):
@@ -227,7 +221,7 @@ class Camera(Activities):
 
         """
         if not self.is_powered:
-            Power.power(SocketId('Camera'), PowerState.On)
+            self.power_on()
         if not self.connected:
             self.connect()
         if self.connected:
@@ -317,4 +311,4 @@ class Camera(Activities):
                 self.end_activity(CameraActivities.WarmingUp, self.logger)
                 self.end_activity(CameraActivities.ShuttingDown, self.logger)
                 self.logger.info(f'warm-up done (temperature={temp:.1f}, set-point={self.warm_set_point})')
-                Power.power(SocketId('Camera'), PowerState.Off)
+                self.power_off()

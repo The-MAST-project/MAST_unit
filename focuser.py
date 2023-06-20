@@ -3,7 +3,7 @@ from typing import TypeAlias
 import logging
 from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log
-from power import Power, PowerState, SocketId
+from powered_device import PoweredDevice, PowerState
 from PlaneWave import pwi4_client
 
 FocuserType: TypeAlias = "Focuser"
@@ -46,7 +46,7 @@ class FocuserStatus:
         self.activities_verbal = self.activities.name
 
 
-class Focuser(Activities):
+class Focuser(Activities, PoweredDevice):
 
     logger: logging.Logger
     pw: pwi4_client
@@ -61,15 +61,14 @@ class Focuser(Activities):
         except Exception as ex:
             self.logger.exception(ex)
             raise ex
+
+        PoweredDevice.__init__(self, 'Focuser', self)
+
         self.pw = pwi4_client.PWI4()
         self.timer = RepeatTimer(2, function=self.ontimer)
-        self.timer.name = 'focuser-timer'
+        self.timer.name = 'focuser-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
-
-    @property
-    def is_powered(self):
-        return Power.is_on(SocketId('Focuser'))
 
     @return_with_status
     def startup(self):
@@ -77,7 +76,7 @@ class Focuser(Activities):
         :mastapi:
         """
         if not self.is_powered:
-            Power.power(SocketId('Focuser'), PowerState.On)
+            self.power(PowerState.On)
         if not self.connected:
             self.connect()
         self.pw.focuser_enable()
@@ -91,7 +90,7 @@ class Focuser(Activities):
             self.disconnect()
         self.pw.focuser_disable()
         if self.is_powered:
-            Power.power(SocketId('Focuser'), PowerState.Off)
+            self.power(PowerState.Off)
 
     @return_with_status
     def connect(self):

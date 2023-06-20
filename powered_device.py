@@ -1,14 +1,10 @@
 
 from enum import Enum
-import logging
 import time
 from typing import TypeAlias
-from utils import return_with_status, init_log
+from utils import return_with_status
 
-PowerType: TypeAlias = "Power"
-
-logger = logging.getLogger('mast.unit.power')
-init_log(logger)
+PowerType: TypeAlias = "PoweredDevice"
 
 
 class PowerState(Enum):
@@ -31,6 +27,7 @@ class SocketId:
 class Socket:
     id: SocketId
     state: PowerState
+    dev: None
 
     def __init__(self, _id: SocketId, state: PowerState):
         self.id = _id
@@ -80,69 +77,62 @@ class PowerStatus:
                 self.is_operational = False
                 self.reasons.append(f'socket[{socket.id.name}] is OFF')
 
-        ip_address: str = ''
 
+class PoweredDevice:
 
-class Power:
+    socket: Socket
+    dev: None
 
-    def __init__(self):
-        pass
+    def __init__(self, socket_name: str, dev):
+        self.dev = dev
+        for sock in sockets:
+            if sock.id.name == socket_name:
+                self.socket = sock
+                self.socket.dev = dev
+                return
+        raise f"No socket named '{socket_name}'"
 
-    @staticmethod
     @return_with_status
-    def power(which_socket: SocketId, wanted_state: PowerState | str):
+    def power(self, wanted_state: PowerState | str):
         if isinstance(wanted_state, str):
             wanted_state = PowerState(wanted_state)
 
-        which_socket.id = name2id(which_socket)
-        validate(which_socket)
-        sockets[which_socket.id].state = wanted_state
-        logger.info(f'Turned socket[{sockets[which_socket.id].id.name}] to {wanted_state}')
+        self.socket.state = wanted_state
+        self.dev.logger.info(f"Turned socket[{self.socket.id.name}] to '{wanted_state}'")
         time.sleep(2)
 
-    @staticmethod
-    def state(which_socket: SocketId) -> PowerState:
-        sock = None
-        for sock in sockets:
-            if sock.id.name == which_socket.name:
-                break
-        return sock.state if sock else None
+    def power_on(self):
+        self.power(PowerState.On)
 
-    # @return_with_status
-    @staticmethod
-    def startup():
+    def power_off(self):
+        self.power(PowerState.Off)
+
+    def power_state(self) -> PowerState:
+        return self.socket.state
+
+    def startup(self):
         pass
 
-    # @return_with_status
-    @staticmethod
-    def shutdown():
+    def shutdown(self):
         pass
 
     @staticmethod
     def status():
         return PowerStatus()
 
-    @staticmethod
-    def is_on(which_socket: SocketId) -> bool:
-        for sock in sockets:
-            if sock.id.name == which_socket.name:
-                return sock.state == PowerState.On
-        return False
+    def is_powered(self) -> bool:
+        return self.socket.state == PowerState.On
 
     @staticmethod
     def all_on():
         for sock in sockets:
-            Power.power(SocketId(sock.id.name), PowerState.On)
+            dev = PoweredDevice(sock.id.name, sock.dev)
+            dev.power_on()
 
     @staticmethod
     def all_off():
         for sock in sockets:
-            Power.power(SocketId(sock.id.name), PowerState.Off)
-
-
-def validate(socket_id: SocketId):
-    if socket_id.name not in [sock.id.name for sock in sockets]:
-        raise f'Invalid socket_id={socket_id}.  Must be [0..{len(sockets)}]'
+            sock.state = PowerState.Off
 
 
 def name2id(_id: SocketId) -> int:
