@@ -317,28 +317,17 @@ class Unit(Activities):
 
     def do_guide(self):
 
-        proc = None
-        pid_file = 'PlateSolveSimulator/.pid'
-        if os.path.exists(pid_file):
-            with open(pid_file, 'r') as f:
-                pid = int(f.readline().strip())
-            if psutil.pid_exists(pid):
-                for proc in psutil.process_iter():
-                    if proc.pid == pid:
-                        break
-            os.unlink(pid_file)
-
+        proc = utils.find_process(patt='PSSimulator')
         if proc:
-            self.plate_solver_process.kill()
-            self.logger.info(f'killed existing plate solving process (pid={self.plate_solver_process.pid})')
+            proc.kill()
+            self.logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
 
         self.acquire_semaphore()    # prevent newly spawned process from acquiring it
-        subprocess.Popen("c:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator/run.bat",
-                         cwd='C:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator',
-                         shell=True)
+        sim_dir = 'C:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator'
+        subprocess.Popen(os.path.join(sim_dir, 'run.bat'), cwd=sim_dir, shell=True)
         self.plate_solver_process = utils.find_process(patt='PSSimulator')
 
-        self.logger.info(f'plate solver process pid={self.plate_solver_process.pid}')
+        self.logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
 
         last_ra: float = -1
         last_dec: float = -1

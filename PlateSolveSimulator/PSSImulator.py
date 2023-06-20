@@ -51,6 +51,22 @@ image_counter = ImageCounter()
 
 
 def solve_image(params: dict):
+    """
+    A simulated plate solver.  It:
+    - gets the image parameters (a dictionary) from the guider process
+    - saves the image from the 'PlateSolving_Image' shared memory segment into a FITS file (just to check
+        the sharing mechanism works)
+    - copies the input parameters to the 'PlateSolving_Results' shared memory segment
+
+    Parameters
+    ----------
+    params: dict - A dictionary previously created from a name=value list in the 'PlateSolving_Params'
+                     shared memory segment
+
+    Returns
+    -------
+
+    """
     if 'ra' in params.keys() and 'dec' in params.keys():
         ra = float(params['ra'])
         dec = float(params['dec'])
@@ -63,11 +79,13 @@ def solve_image(params: dict):
         NumX = int(params['NumX'])
         NumY = int(params['NumY'])
         image = np.ndarray((NumX, NumY), dtype=np.uint32, buffer=image_shm.buf)
-        hdu = fits.hdu.PrimaryHDU(image)
-        hdu.header['NAXIS1'] = NumX
-        hdu.header['NAXIS2'] = NumY
-        hdu.header['RA'] = ra
-        hdu.header['DEC'] = dec
+        header = {
+            'NAXIS1': NumY,
+            'NAXIS2': NumX,
+            'RA': ra,
+            'DEC': dec,
+        }
+        hdu = fits.hdu.PrimaryHDU(image, header=header)
 
         counter = image_counter.value
         os.makedirs('images', exist_ok=True)
@@ -93,8 +111,6 @@ def init_log(logger: logging.Logger):
 
 if __name__ == '__main__':
 
-    with open('.pid', 'w') as f:
-        f.write(f'{os.getpid()}\n')
     init_log(logger)
     logger.info('---------------')
     logger.info('New PSSimulator')
@@ -102,13 +118,18 @@ if __name__ == '__main__':
 
     semaphore = Semaphore('PlateSolving')
 
+    #
+    # The shared resources (semaphore and shared memory segments) get created
+    #  by the guiding software.  We can only patiently wait for them to get created before we
+    #  can use them
+    #
     got_memory_segments = False
     got_semaphore = False
     while not (got_memory_segments and got_semaphore):
         try:
             semaphore.open()
             got_semaphore = True
-        except AssertionError:
+        except (AssertionError, FileNotFoundError):
             pass
 
         try:
