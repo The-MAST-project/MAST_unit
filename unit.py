@@ -11,7 +11,7 @@ import covers
 import stage
 import mount
 import focuser
-from powered_device import PowerStatus,SocketId, PoweredDevice
+from powered_device import PowerStatus,SocketId, PoweredDevice, sockets
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -518,8 +518,10 @@ class Unit(Activities):
         """
         if isinstance(socket_id, str):
             socket_id = SocketId(socket_id)
-        sock = PoweredDevice(socket_name=socket_id.name)
-        sock.power_on()
+        for sock in sockets:
+            if sock.id.name == socket_id.name:
+                sock.dev.power_on()
+                return
 
     @return_with_status
     def power_off(self, socket_id: SocketId | str):
@@ -534,8 +536,10 @@ class Unit(Activities):
         """
         if isinstance(socket_id, str):
             socket_id = SocketId(socket_id)
-        sock = PoweredDevice(socket_name=socket_id.name)
-        sock.power_off()
+        for sock in sockets:
+            if sock.id.name == socket_id.name:
+                sock.dev.power_off()
+                return
 
     def status(self) -> UnitStatus:
         """
