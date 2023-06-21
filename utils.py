@@ -20,7 +20,7 @@ from multiprocessing import shared_memory
 class RepeatTimer(Timer):
     def run(self):
         while not self.finished.wait(self.interval):
-            self.function(*self.args,**self.kwargs)
+            self.function(*self.args, **self.kwargs)
 
 
 class Activities:
@@ -126,7 +126,6 @@ class DailyFileHandler(logging.FileHandler):
 
     def __init__(self, path: str, mode='a', encoding=None, delay=False, errors=None):
         self.path = path
-        # self.filename = self.make_file_name()
         if "b" not in mode:
             encoding = io.text_encoding(encoding)
         logging.FileHandler.__init__(self, filename='', delay=True, mode=mode, encoding=encoding, errors=errors)
@@ -137,7 +136,8 @@ def init_log(logger: logging.Logger):
     logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s} - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s}' +
+                                  ' - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -217,7 +217,7 @@ class Subsystem:
         self.obj_name = obj_name
 
 
-def parse_params(memory: shared_memory.SharedMemory, logger=logging.Logger) -> dict:
+def parse_params(memory: shared_memory.SharedMemory, logger: logging.Logger) -> dict:
     bytes_array = bytearray(memory.buf)
     string_array = bytes_array.decode(encoding='utf-8')
     data = string_array[:string_array.find('\x00')]
@@ -229,7 +229,6 @@ def parse_params(memory: shared_memory.SharedMemory, logger=logging.Logger) -> d
         key = match[0]
         value = match[1].strip()
         logger.info(f"key={match[0]}, value='{value}'")
-        # d[match[0]] = re.split(r' (?![A-Za-z])', values)
         d[key] = value
     return d
 
@@ -274,6 +273,7 @@ def find_process(patt: str = None, pid: int | None = None) -> psutil.Process:
 
     return ret
 
+
 def ensure_process_is_running(pattern: str, cmd: str, logger: logging.Logger, env: dict = None,
                               cwd: str = None, shell: bool = False) -> psutil.Process:
     """
@@ -293,8 +293,6 @@ def ensure_process_is_running(pattern: str, cmd: str, logger: logging.Logger, en
     -------
 
     """
-
-
     p = find_process(pattern)
     if p is not None:
         logger.debug(f'A process with pattern={pattern} in the commandline exists, pid={p.pid}')
