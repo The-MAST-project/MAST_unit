@@ -1,15 +1,5 @@
-#
-# Forever:
-#  - Try to acquire PlateSolving named semaphore
-#  - When acquired, get parameters from PlateSolving_Params shared segment (specifically ra and dec)
-#  - Copy ra and dec to Results shared segment
-#  - Release PlateSolving Semaphore
-#  - Wait a few seconds
-#  - Go back to trying to acquire semaphore
-#
 import os.path
 import time
-
 import numpy as np
 from semaphore_win_ctypes import Semaphore
 from multiprocessing.shared_memory import SharedMemory
