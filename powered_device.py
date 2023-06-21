@@ -81,7 +81,7 @@ class PowerStatus:
 class PoweredDevice:
 
     socket: Socket
-    dev: None
+    dev: None   # back-pointer to the parent device, used for logging
 
     def __init__(self, socket_name: str, dev):
         self.dev = dev
