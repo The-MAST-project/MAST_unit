@@ -33,25 +33,21 @@ class StageStatus:
 stage_state_str2int_dict: dict = {
 
     'Idle': 0,
-    'In': 1,
-    'Out': 2,
-    'MovingIn': 3,
-    'MovingOut': 4,
-    'Error': 5,
     'Science': 1,
     'Guiding': 2,
+    'MovingToScience': 3,
+    'MovingOut': 4,
+    'Error': 5,
 }
 
 
 class StageState(Enum):
     Idle = 0
-    In = 1
-    Out = 2
-    MovingIn = 3
-    MovingOut = 4
+    AtScience = 1
+    AtGuiding = 2
+    MovingToScience = 3
+    MovingToGuiding = 4
     Error = 5
-    Science = In
-    Guiding = Out
 
 
 class Stage(Mastapi, Activities, PoweredDevice):
@@ -66,7 +62,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
     _connected: bool
     _position: int = 0
     state: StageState
-    default_initial_state: StageState = StageState.In
+    default_initial_state: StageState = StageState.AtScience
     ticks_at_start: int
     ticks_at_target: int
     motion_start_time: datetime
@@ -104,7 +100,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
                 # if it is not at the preferred initial stage location (In/Out?)
                 #  - move it
                 #  - set self.state accordingly
-                self.state = StageState.In
+                self.state = StageState.AtScience
                 self.position = self.TICKS_WHEN_IN
 
             except Exception as ex:
@@ -149,9 +145,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.power_on()
         if not self.connected:
             self.connect()
-        if self.state is not StageState.Science:
+        if self.state is not StageState.AtScience:
             self.start_activity(StageActivities.StaringUp, self.logger)
-            self.move(StageState.Science)
+            self.move(StageState.AtScience)
 
     @return_with_status
     def shutdown(self):
@@ -163,9 +159,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
         if not self.is_powered:
             return
 
-        if not self.state == StageState.Guiding:
+        if not self.state == StageState.AtGuiding:
             self.start_activity(StageActivities.ShuttingDown, self.logger)
-            self.move(StageState.Guiding)
+            self.move(StageState.AtGuiding)
         self.disconnect()
         self.power_off()
 
@@ -190,9 +186,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
             st.is_connected = self.connected
             if st.is_connected:
                 st.state = self.state
-                st.is_operational = st.state == StageState.Science
+                st.is_operational = st.state == StageState.AtScience
                 if not st.is_operational:
-                    st.reasons.append(f'state is {st.state} instead of {StageState.Science}')
+                    st.reasons.append(f'state is {st.state} instead of {StageState.AtScience}')
                 st.state_verbal = st.state.name
                 st.position = self.position
                 st.activities = self.activities
@@ -213,23 +209,23 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         if self.is_active(StageActivities.Moving):
             dt = (datetime.datetime.now() - self.motion_start_time).seconds
-            if self.state == StageState.MovingOut:
+            if self.state == StageState.MovingToGuiding:
                 pos = self.ticks_at_start + dt * self.TICKS_PER_SECOND
                 if pos > self.TICKS_WHEN_OUT:
                     pos = self.TICKS_WHEN_OUT
-                    self.state = StageState.Out
+                    self.state = StageState.AtGuiding
                     self.end_activity(StageActivities.Moving, self.logger)
             else:
                 pos = self.ticks_at_start - dt * self.TICKS_PER_SECOND
                 if pos <= self.TICKS_WHEN_IN:
                     pos = self.TICKS_WHEN_IN
-                    self.state = StageState.In
+                    self.state = StageState.AtScience
                     self.end_activity(StageActivities.Moving, self.logger)
 
             self.position = pos
-            if self.is_active(StageActivities.StaringUp) and self.state == StageState.In:
+            if self.is_active(StageActivities.StaringUp) and self.state == StageState.AtScience:
                 self.end_activity(StageActivities.StaringUp, self.logger)
-            if self.is_active(StageActivities.ShuttingDown) and self.state == StageState.Out:
+            if self.is_active(StageActivities.ShuttingDown) and self.state == StageState.AtGuiding:
                 self.end_activity(StageActivities.ShuttingDown, self.logger)
             self.logger.info(f'ontimer: position={self.position}')
 
@@ -250,7 +246,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
             return
 
         self.start_activity(StageActivities.Moving, self.logger)
-        self.state = StageState.MovingIn if where == StageState.In else StageState.MovingOut
+        self.state = StageState.MovingToScience if where == StageState.AtScience else StageState.MovingToGuiding
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
         self.logger.info(f'move: at {self.position} started moving, state={self.state}')
