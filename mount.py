@@ -70,6 +70,9 @@ class Mount(Activities, PoweredDevice):
     timer: RepeatTimer
     last_axis0_position_degrees: int = -99999
     last_axis1_position_degrees: int = -99999
+    default_guide_rate_degs_per_second = 0.002083  # degs/sec
+    guide_rate_degs_per_second: float
+    guide_rate_degs_per_ms: float
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.mount')
@@ -79,6 +82,13 @@ class Mount(Activities, PoweredDevice):
 
         self.pw = pwi4_client.PWI4()
         self.ascom = win32com.client.Dispatch('ASCOM.PWI4.Telescope')
+        #
+        # Starting with PWI4 version 4.0.99 beta 22 it will be possible to query the ASCOM driver about
+        #  the GuideRate for RightAscension and Declination.  The DriverVersion shows 1.0 (disregarding the PWI4
+        #  version) so we need to use the default rate.
+        #
+        self.guide_rate_degs_per_second = self.default_guide_rate_degs_per_second
+        self.guide_rate_degs_per_ms = self.guide_rate_degs_per_second / 1000
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'mount-timer-thread'
         self.timer.start()

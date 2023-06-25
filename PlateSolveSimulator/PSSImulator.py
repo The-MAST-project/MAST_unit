@@ -1,13 +1,14 @@
 import os.path
+import socket
 import time
 import numpy as np
-from semaphore_win_ctypes import Semaphore
 from multiprocessing.shared_memory import SharedMemory
 from time import sleep
-from utils import parse_params, store_params
 from astropy.io import fits
 import os
 import logging
+import guiding
+import json
 
 image_params_shm: SharedMemory | None = None
 image_shm: SharedMemory | None = None
@@ -40,7 +41,7 @@ class ImageCounter:
 image_counter = ImageCounter()
 
 
-def solve_image(params: dict):
+def solve_image(params: dict) -> dict:
     """
     A simulated plate solver.  It:
     - gets the image parameters (a dictionary) from the guider process
@@ -57,46 +58,44 @@ def solve_image(params: dict):
     -------
 
     """
-    if 'ra' in params.keys() and 'dec' in params.keys():
-        ra = float(params['ra'])
-        dec = float(params['dec'])
-        d = {
-            'solved': True,
-            'ra': ra,
-            'dec': dec,
-        }
-        store_params(results_shm, d)
-        NumX = int(params['NumX'])
-        NumY = int(params['NumY'])
-        image = np.ndarray((NumX, NumY), dtype=np.uint32, buffer=image_shm.buf)
-        header = {
-            'NAXIS1': NumY,
-            'NAXIS2': NumX,
-            'RA': ra,
-            'DEC': dec,
-        }
-        hdu = fits.hdu.PrimaryHDU(image, header=header)
+    ret = {
+        'ra': params['ra'],
+        'dec': params['dec'],
+        'success': True,
+        'reasons': None,
+    }
 
-        counter = image_counter.value
-        os.makedirs('images', exist_ok=True)
-        image_counter.value = counter + 1
+    width = params['width']
+    height = params['height']
+    image = np.ndarray((width, height), dtype=np.uint32, buffer=image_shm.buf)
+    header = fits.Header()
+    header['NAXIS1'] = width
+    header['NAXIS2'] = height
+    header['RA'] = ret['ra']
+    header['DEC'] = ret['dec']
+    hdu = fits.hdu.PrimaryHDU(image, header=header)
 
-        hdu.writeto(os.path.join(image_dir, f'image-{counter}.fits'))
-        print(f'solved image: ra={ra} dec={dec}')
+    counter = image_counter.value
+    os.makedirs('images', exist_ok=True)
+    image_counter.value = counter + 1
+
+    hdu.writeto(os.path.join(image_dir, f'image-{counter}.fits'))
+    logger.info(f"solved image: ra={ret['ra']} dec={ret['dec']}")
+    return ret
 
 
-def init_log(logger: logging.Logger):
-    logger.setLevel(logging.DEBUG)
+def init_log(lg: logging.Logger):
+    lg.setLevel(logging.DEBUG)
     handler = logging.StreamHandler()
     handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - {%(name)s:%(threadName)s:%(thread)s} - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - {%(name)s:%(threadName)s:%(thread)s} - %(message)s')
     handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    lg.addHandler(handler)
 
     handler = logging.FileHandler(filename='PSSimulator.log', mode='a')
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    lg.addHandler(handler)
 
 
 if __name__ == '__main__':
@@ -106,33 +105,40 @@ if __name__ == '__main__':
     logger.info('New PSSimulator')
     logger.info('---------------')
 
-    semaphore = Semaphore('PlateSolving')
-
     #
     # The shared resources (semaphore and shared memory segments) get created
     #  by the guiding software.  We can only patiently wait for them to get created before we
     #  can use them
     #
-    got_memory_segments = False
-    got_semaphore = False
-    while not (got_memory_segments and got_semaphore):
+    got_memory_segment = False
+    while not got_memory_segment:
         try:
-            semaphore.open()
-            got_semaphore = True
-        except (AssertionError, FileNotFoundError):
-            pass
-
-        try:
-            image_params_shm = SharedMemory(name='PlateSolving_Params')
             image_shm = SharedMemory(name='PlateSolving_Image')
-            results_shm = SharedMemory(name='PlateSolving_Results')
-            got_memory_segments = True
+            got_memory_segment = True
         except FileNotFoundError:
-            pass
+            logger.info("Waiting for the shared resources (not found, sleeping 2) ...")
+            sleep(2)
+            continue
 
-        if not (got_semaphore and got_memory_segments):
+        if not got_memory_segment:
             logger.info("Waiting for the shared resources ...")
             sleep(5)
+
+    hello = {
+        'ready': True,
+        'reasons': None,
+    }
+
+    # logger.info(f"creating socket")
+    socket_to_guider = socket.socket(family=socket.AF_INET)
+    # logger.info(f"connecting socket")
+    socket_to_guider.connect(guiding.guider_address_port)
+    logger.info(f"connected socket to {guiding.guider_address_port}")
+
+    msg = json.dumps(hello).encode('utf-8')
+    # logger.info(f"sending '{msg}' on socket")
+    socket_to_guider.send(msg)
+    # logger.info("sent on socket")
 
     while True:
         """
@@ -140,17 +146,22 @@ if __name__ == '__main__':
         """
         try:
             # wait for the guider software to acquire the image and place it in the shared segment
-            semaphore.acquire(timeout_ms=None)
-            logger.info(f"semaphore acquired")
-            image_param_dict = parse_params(image_params_shm, logger)
-            if not image_param_dict:
-                semaphore.release()
+            # logger.info("receiving on socket")
+            s = socket_to_guider.recv(1024)
+            # logger.info(f"received '{s}' on socket")
+            image_params = None
+            try:
+                image_params = json.loads(s.decode('utf-8'))
+            except Exception as ex:
+                pass  # TBD
+            if not image_params:
+                logger.warning('bad image_params')
                 continue
 
-            solve_image(image_param_dict)
-            # let the guiding software know that the results are available
-            semaphore.release()
-            logger.info(f"semaphore released")
+            response = solve_image(image_params)
+            # logger.info(f"sending '{response}' on socket")
+            socket_to_guider.send(json.dumps(response).encode('utf-8'))
+            # logger.info('sent response to guider')
             time.sleep(1)
         except Exception as e:
             logger.error('exception: ', e)

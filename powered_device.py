@@ -98,7 +98,7 @@ class PoweredDevice:
             wanted_state = PowerState(wanted_state)
 
         self.socket.state = wanted_state
-        self.dev.logger.info(f"Turned socket[{self.socket.id.name}] to '{wanted_state}'")
+        self.dev.logger.info(f"Turned socket '{self.socket.id.name}' to '{wanted_state}'")
         time.sleep(2)
 
     def power_on(self):
@@ -120,6 +120,7 @@ class PoweredDevice:
     def status():
         return PowerStatus()
 
+    @property
     def is_powered(self) -> bool:
         return self.socket.state == PowerState.On
 

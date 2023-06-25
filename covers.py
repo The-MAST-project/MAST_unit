@@ -68,16 +68,14 @@ class Covers(Activities, PoweredDevice):
 
         :mastapi:
         """
-        if self.is_powered:
-            self.connected = True
+        self.connected = True
 
     def disconnect(self):
         """
         Disconnects from the **MAST** mirror cover controller
         :mastapi:
         """
-        if self.is_powered:
-            self.connected = False
+        self.connected = False
 
     @property
     def connected(self):
@@ -88,7 +86,11 @@ class Covers(Activities, PoweredDevice):
 
     @connected.setter
     def connected(self, value):
-        if self.ascom:
+        self.logger.info(f"connected = {value}")
+        try:
+            self.ascom.Connected = value
+        except Exception as ex:
+            self.logger.error(f"failed to set connected to '{value}'", exc_info=ex)
             self.ascom.Connected = value
 
     def state(self) -> CoversState:
@@ -181,6 +183,7 @@ class Covers(Activities, PoweredDevice):
         if not self.connected:
             return
 
+        # self.logger.debug(f"activities: {self.activities}, state: {self.state()}")
         if self.is_active(CoverActivities.Opening) and self.state() == CoversState.Open:
             self.end_activity(CoverActivities.Opening, self.logger)
             if self.is_active(CoverActivities.StartingUp):

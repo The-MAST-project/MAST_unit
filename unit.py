@@ -1,6 +1,8 @@
 import datetime
 import logging
+import socket
 import psutil
+import guiding
 import utils
 from PlaneWave import pwi4_client
 from PlaneWave.platesolve import platesolve
@@ -20,14 +22,30 @@ import numpy as np
 from utils import return_with_status, Activities, RepeatTimer
 from enum import Flag
 from threading import Thread
-from semaphore_win_ctypes import Semaphore
 from multiprocessing.shared_memory import SharedMemory
-from utils import parse_params, ensure_process_is_running, store_params
+from utils import ensure_process_is_running
 from camera import CameraActivities
 import os
 import subprocess
+from enum import Enum
+import json
+from guiding import *
 
 UnitType: TypeAlias = "Unit"
+
+
+class GuideDirections(Enum):
+    guideNorth = 0
+    guideSouth = 1
+    guideEast = 2
+    guideWest = 3
+
+
+class SolverResponse:
+    solved: bool
+    reason: str
+    ra: float
+    dec: float
 
 
 class UnitActivities(Flag):
@@ -107,12 +125,9 @@ class Unit(Activities):
     plate_solver_process: psutil.Process | subprocess.Popen
 
     # Stuff for plate solving
-    image_params_shm: SharedMemory = None
     image_shm: SharedMemory = None
-    results_shm: SharedMemory = None
-    plate_solving_semaphore: Semaphore = None
     was_tracking_before_guiding: bool
-    have_semaphore: bool = False
+    sock_to_solver = None
 
     GUIDING_EXPOSURE_SECONDS = 5
     GUIDING_INTER_EXPOSURE_SECONDS = 30
@@ -122,19 +137,6 @@ class Unit(Activities):
         utils.init_log(self.logger)
         if unit_id < 0 or unit_id > self.MAX_UNITS:
             raise f'Unit id must be between 0 and {self.MAX_UNITS}'
-
-        self.plate_solving_semaphore = Semaphore(name='PlateSolving')
-        self.plate_solving_semaphore.create()
-
-        try:
-            self.image_params_shm = SharedMemory(name='PlateSolving_Params')
-        except FileNotFoundError:
-            self.image_params_shm = SharedMemory(name='PlateSolving_Params', create=True, size=4096)
-
-        try:
-            self.results_shm = SharedMemory(name='PlateSolving_Results')
-        except FileNotFoundError:
-            self.results_shm = SharedMemory(name='PlateSolving_Results', create=True, size=4096)
 
         self.id = unit_id
         try:
@@ -160,6 +162,9 @@ class Unit(Activities):
         self.camera.startup()
         self.covers.startup()
         self.focuser.startup()
+
+        if not self.stage.connected:
+            self.stage.connect()
 
     @return_with_status
     def startup(self):
@@ -289,30 +294,9 @@ class Unit(Activities):
 
         return self.pw.status().autofocus.is_running
 
-    def acquire_semaphore(self):
-        if self.have_semaphore:
-            self.logger.info(f"already have semaphore '{self.plate_solving_semaphore.name}'")
-            return
-
-        sem = None
-        self.logger.info(f"trying to acquire semaphore '{self.plate_solving_semaphore.name}'")
-        while not sem:
-            try:
-                sem = self.plate_solving_semaphore.acquire(timeout_ms=500)
-            except OSError:
-                self.logger.info("timed out waiting for semaphore '{self.plate_solving_semaphore.name}' ...")
-                time.sleep(.5)
-        self.have_semaphore = True
-        self.logger.info(f'acquired semaphore {self.plate_solving_semaphore.name}')
-
-    def release_semaphore(self):
-        self.plate_solving_semaphore.release()
-        self.have_semaphore = False
-        self.logger.info(f"released semaphore {self.plate_solving_semaphore.name}")
-
     def end_guiding(self):
-        self.release_semaphore()
         self.plate_solver_process.kill()
+        self.sock_to_solver.shutdown(socket.SHUT_RDWR)
         self.logger.info(f'guiding ended')
 
     def do_guide(self):
@@ -322,15 +306,33 @@ class Unit(Activities):
             proc.kill()
             self.logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
 
-        self.acquire_semaphore()    # prevent newly spawned process from acquiring it
         sim_dir = 'C:/Users/User/PycharmProjects/MAST_unit/PlateSolveSimulator'
         subprocess.Popen(os.path.join(sim_dir, 'run.bat'), cwd=sim_dir, shell=True)
-        self.plate_solver_process = utils.find_process(patt='PSSimulator')
+        while True:
+            self.plate_solver_process = utils.find_process(patt='PSSimulator')
+            if self.plate_solver_process:
+                break
+            else:
+                time.sleep(1)
 
         self.logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
 
-        last_ra: float = -1
-        last_dec: float = -1
+        # self.logger.info(f"creating server socket ...")
+        server = socket.create_server(guiding.guider_address_port, family=socket.AF_INET)
+        self.logger.info(f"listening on {guiding.guider_address_port}")
+        server.listen()
+        # self.logger.info(f"accepting on server socket")
+        self.sock_to_solver, address = server.accept()
+        # self.logger.info("accepted on server socket")
+
+        # self.logger.info("receiving on server socket")
+        s = self.sock_to_solver.recv(1024)
+        # self.logger.info(f"received '{s}' on server socket")
+        hello = json.loads(s.decode(encoding='utf-8'))
+        if not hello['ready']:
+            pass  # TBD
+
+        self.logger.info(f'plate solver simulator is ready')
 
         while self.is_active(UnitActivities.Guiding):
             self.logger.info(f'starting {self.GUIDING_EXPOSURE_SECONDS} seconds guiding exposure')
@@ -346,14 +348,9 @@ class Unit(Activities):
                 return
 
             self.logger.info(f'guiding exposure done, getting the image from the camera')
-            if not self.image_shm:
-                self.image_shm = SharedMemory(name='PlateSolving_Image', create=True,
-                                              size=(self.camera.NumX * self.camera.NumY * 4))
             shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=np.uint32, buffer=self.image_shm.buf)
             shared_image[:] = self.camera.image[:]
             self.logger.info(f'copied image to shared memory')
-
-            self.acquire_semaphore()
 
             if not self.is_active(UnitActivities.Guiding):
                 self.end_guiding()
@@ -364,16 +361,13 @@ class Unit(Activities):
             ra = pw_status.mount.ra_j2000_hours
             dec = pw_status.mount.dec_j2000_degs
 
-            d = {
-                'ra': ra,
-                'dec': dec,
-                'NumX': self.camera.NumX,
-                'NumY': self.camera.NumY,
+            request = {
+                'ra': ra + (20 / (24 * 60 * 60)),
+                'dec': dec + (15 / (360 * 60 * 60)),
+                'width': self.camera.NumX,
+                'height': self.camera.NumY,
             }
-            store_params(self.image_params_shm, d)
-
-            # let the solver know it has a new job
-            self.release_semaphore()
+            self.sock_to_solver.send(json.dumps(request).encode('utf-8'))
 
             # plate solver is now solving
 
@@ -381,35 +375,35 @@ class Unit(Activities):
                 self.end_guiding()
                 return
 
-            # wait till the solver is done
-            self.acquire_semaphore()
+            # block till the solver is done
 
-            self.logger.info('parsing plate solving result')
-            results = parse_params(self.results_shm, self.logger)
+            b = self.sock_to_solver.recv(1024)
+            response = json.loads(b)
 
-            if 'solved' in results.keys() and bool(results['solved']):
+            if not response['success']:
+                self.logger.warning(f"solver could not solve, reason '{response.reasons}")
+                continue
+
+            # self.logger.info('parsing plate solving result')
+
+            if response['success']:
                 self.logger.info(f"plate solving succeeded")
-                solved_ra = float(results['ra'])
-                solved_dec = float(results['dec'])
+                solved_ra = response['ra']
+                solved_dec = response['dec']
+                pw_status = self.pw.status()
+                mount_ra = pw_status.mount.ra_j2000_hours
+                mount_dec = pw_status.mount.dec_j2000_degs
 
-                if last_ra != -1 and last_dec != -1:
-                    delta_ra = solved_ra - last_ra      # mind sign and mount offset direction
-                    delta_dec = solved_dec - last_dec   # ditto
+                delta_ra = solved_ra - mount_ra      # mind sign and mount offset direction
+                delta_dec = solved_dec - mount_dec   # ditto
 
-                    # tell the mount to correct by (delta_ra, delta_dec)
-                    # Angle(delta_ra * u.deg).value.tostring(decimal=False)
-                    self.logger.info(f'TODO: telling mount to correct by ra={delta_ra}, dec={delta_dec} ...')
-                    self.pw.mount_goto_ra_dec_j2000(ra + delta_ra, dec + delta_dec)
-                    while True:
-                        pw_status = self.pw.status()
-                        if not pw_status.mount.is_slewing:
-                            break
-                        self.logger.info(f'waiting for mount to stop slewing ...')
-                        time.sleep(1)
-                    self.logger.info(f'mount stopped slewing')
+                delta_ra_arcsec = delta_ra / (60 * 60)
+                delta_dec_arcsec = delta_dec / (60 * 60)
 
-                last_ra = solved_ra
-                last_dec = solved_dec
+                self.logger.info(f'telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, dec={delta_dec_arcsec:.10f}arcsec')
+                self.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
+            else:
+                pass  # TBD
 
             self.logger.info(f"done solving cycle, sleeping {self.GUIDING_INTER_EXPOSURE_SECONDS} seconds ...")
             # avoid sleeping for a long time, for better agility at sensing that guiding was stopped
@@ -442,6 +436,9 @@ class Unit(Activities):
             self.logger.info('started mount tracking')
 
         self.start_activity(UnitActivities.Guiding, self.logger)
+        if not self.image_shm:
+            self.image_shm = SharedMemory(name='PlateSolving_Image', create=True,
+                                          size=(self.camera.NumX * self.camera.NumY * 4))
         Thread(name='guiding-thread', target=self.do_guide).start()
 
     @return_with_status
@@ -459,8 +456,11 @@ class Unit(Activities):
             self.end_activity(UnitActivities.Guiding, self.logger)
 
         if self.plate_solver_process:
-            self.plate_solver_process.kill()
-            self.logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
+            try:
+                self.plate_solver_process.kill()
+                self.logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
+            except psutil.NoSuchProcess:
+                pass
 
         if not self.was_tracking_before_guiding:
             self.mount.stop_tracking()
@@ -612,14 +612,14 @@ class Unit(Activities):
     def end_lifespan(self):
         self.logger.info('unit end lifespan')
         if 'plate_solver_process' in self.__dict__.keys() and self.plate_solver_process:
-            self.plate_solver_process.kill()
+            try:
+                self.plate_solver_process.kill()
+            except psutil.NoSuchProcess:
+                pass
 
-        for shm in [self.image_shm, self.image_params_shm, self.results_shm]:
-            if shm is None:
-                continue
-            shm.close()
-            shm.unlink()
-        self.plate_solving_semaphore.close()
+        self.image_shm.close()
+        self.image_shm.unlink()
+
 
         self.camera.ascom.Connected = False
         self.mount.ascom.Connected = False
@@ -632,4 +632,5 @@ class Unit(Activities):
                                   logger=self.logger)
         ensure_process_is_running(pattern='PWShutter',
                                   cmd="C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Shutter Control/PWShutter.exe",
-                                  logger=self.logger)
+                                  logger=self.logger,
+                                  shell=True)
