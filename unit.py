@@ -23,7 +23,7 @@ from utils import return_with_status, Activities, RepeatTimer
 from enum import Flag
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from utils import ensure_process_is_running
+from utils import ensure_process_is_running, TimeStamped
 from camera import CameraActivities
 import os
 import subprocess
@@ -56,7 +56,7 @@ class UnitActivities(Flag):
     ShuttingDown = (1 << 3)
 
 
-class UnitStatus:
+class UnitStatus(TimeStamped):
 
     power: PowerStatus
     camera: camera.CameraStatus
@@ -101,6 +101,7 @@ class UnitStatus:
                 self.reasons['covers'] = self.covers.reasons
             if self.focuser and self.focuser.reasons:
                 self.reasons['focuser'] = self.focuser.reasons
+        self.timestamp()
 
 
 class Unit(Activities):
@@ -539,7 +540,6 @@ class Unit(Activities):
         """
         return UnitStatus(self)
 
-    @return_with_status
     def test_solving(self, exposure_seconds: int | str):
         """
         Tests the ``platesolve`` routine
@@ -549,52 +549,68 @@ class Unit(Activities):
         exposure_seconds int
             Exposure time in seconds
         """
-        if not self.camera.connected:
-            return
+        self.camera.startup()
 
         pw_stat = self.pw.request_with_status('/status')
         if self.mount.connected:
-            raise Exception('Mount not connected')
+            self.mount.connect()
+
+        stop_tracking = False
         if not pw_stat.mount.is_tracking:
-            raise Exception('Mount is not tracking')
+            stop_tracking = True
+            self.logger.info(f"starting tracking")
+            self.mount.start_tracking()
 
         ra = pw_stat.mount.ra_j2000_hours
-        dec = pw_stat.dec_j2000_degs
+        dec = pw_stat.mount.dec_j2000_degs
 
         if isinstance(exposure_seconds, str):
             exposure_seconds = int(exposure_seconds)
         try:
-            self.camera.start_exposure(exposure_seconds, True, readout_mode=0)
+            self.camera.start_exposure(exposure_seconds)
             time.sleep(.5)
         except Exception as ex:
-            self.logger.exception('plate solve failed:', ex)
+            self.logger.exception('could not start exposure:', ex)
 
         while not self.camera.ascom.ImageReady:
+            self.logger.info(f"Waiting for ImageReady ...")
             time.sleep(1)
+
+        self.logger.info(f"loading image")
         image = self.camera.ascom.ImageArray
+
+        if stop_tracking:
+            self.logger.info(f"stopped tracking")
+            self.mount.stop_tracking()
 
         header = fits.Header()
         header['NAXIS'] = 2
-        header['NAXIS1'] = image.shape[1]
-        header['NAXIS2'] = image.shape[0]
-        header['RA'] = Angle(ra * u.deg).value.tostring(decimal=False)
-        header['DEC'] = Angle(dec * u.deg).value.tostring(decimal=False)
-        hdu = fits.PrimaryHDU(data=image.astype(np.float32), header=header)
+        header['NAXIS1'] = self.camera.ascom.NumY
+        header['NAXIS2'] = self.camera.ascom.NumX
+        header['RA'] = f"{Angle(ra * u.deg).value}"
+        header['DEC'] = f"{Angle(dec * u.deg).value}"
+        hdu = fits.PrimaryHDU(data=image, header=header)
+        hdul = fits.HDUList([hdu])
 
-        fits_file = tempfile.TemporaryFile(mode='w', prefix='platesolve-', suffix='.fits')
-        hdu.writeto(fits_file)
+        # fits_file = tempfile.TemporaryFile(prefix='platesolve-', suffix='.fits')
+        fits_file = 'c:/Temp/xxx.fits'
+        try:
+            hdul.writeto(fits_file, overwrite=True)
+            self.logger.info(f"wrote file '{fits_file}'")
+        except Exception as ex:
+            self.logger.error(f"failed to write to '{fits_file}'", exc_info=ex)
 
-        result = platesolve(fits_file, self.camera.PixelSizeX)
-        os.remove(fits_file)
+        # result = platesolve(fits_file, self.camera.PixelSizeX)
+        # os.remove(fits_file)
 
-        return result
+        # return result
 
     def ontimer(self):
 
         if self.is_active(UnitActivities.StartingUp):
             if not (self.mount.is_active(mount.MountActivity.StartingUp) or
                     self.camera.is_active(camera.CameraActivities.StartingUp) or
-                    self.stage.is_active(stage.StageActivities.StaringUp) or
+                    self.stage.is_active(stage.StageActivities.StartingUp) or
                     self.focuser.is_active(focuser.FocuserActivities.StartingUp) or
                     self.covers.is_active(covers.CoverActivities.StartingUp) or
                     self.mount.is_active(mount.MountActivity.StartingUp)):
@@ -603,7 +619,7 @@ class Unit(Activities):
         if self.is_active(UnitActivities.ShuttingDown):
             if not (self.mount.is_active(mount.MountActivity.ShuttingDown) or
                     self.camera.is_active(camera.CameraActivities.ShuttingDown) or
-                    self.stage.is_active(stage.StageActivities.StaringUp) or
+                    self.stage.is_active(stage.StageActivities.StartingUp) or
                     self.focuser.is_active(focuser.FocuserActivities.ShuttingDown) or
                     self.covers.is_active(covers.CoverActivities.ShuttingDown) or
                     self.mount.is_active(mount.MountActivity.ShuttingDown)):
