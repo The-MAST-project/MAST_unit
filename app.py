@@ -64,7 +64,7 @@ def do_item(subsystem: str, method: str, request: Request):
 
     sub = sub[0]
     all_method_tuples = inspect.getmembers(sub.obj, inspect.ismethod)
-    api_method_tuples = [t for t in all_method_tuples if Mastapi.is_api_method(t[1])]
+    api_method_tuples = [t for t in all_method_tuples if Mastapi.is_api_method(t[1]) or (sub.path == 'planewave' and not t[0].startswith('_'))]
     api_method_names = [t[0] for t in api_method_tuples]
     api_method_objects = [t[1] for t in api_method_tuples]
 
