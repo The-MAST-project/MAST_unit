@@ -26,7 +26,7 @@ def make_parameters(method_name, method, docstring) -> list:
         TypeToSchema(str, {'type': 'string'}),
         TypeToSchema(Union[int, str], {'type': 'number', 'format': 'int32'}),
         TypeToSchema(Union[float, str], {'type': 'number', 'format': 'float'}),
-        TypeToSchema(Union[stage.StageState, str], {'type': 'string', 'enum': ['AtGuiding', 'AtScience']}),
+        TypeToSchema(Union[stage.StageState, str], {'type': 'string', 'enum': ['AtSky', 'AtScience']}),
         TypeToSchema(Union[SocketId, str], {'type': 'string', 'enum': Socket.names()}),
     ]
 
