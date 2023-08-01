@@ -206,6 +206,13 @@ class HelpResponse:
         self.description = doc
 
 
+class TimeStamped:
+    timestamp: datetime
+
+    def timestamp(self):
+        self.timestamp = datetime.datetime.now()
+
+
 class Subsystem:
     path: str
     obj: object
