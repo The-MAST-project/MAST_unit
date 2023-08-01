@@ -1,3 +1,4 @@
+import datetime
 import time
 
 import win32com.client
@@ -5,7 +6,7 @@ import logging
 from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
-from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log
+from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log, TimeStamped
 from powered_device import PoweredDevice
 
 
@@ -22,7 +23,7 @@ class MountActivity(Flag):
     FindingHome = (1 << 5)
 
 
-class MountStatus:
+class MountStatus(TimeStamped):
 
     def __init__(self, m: MountType):
         self.ascom = AscomDriverInfo(m.ascom)
@@ -60,6 +61,8 @@ class MountStatus:
             self.is_connected = False
             self.reasons.append('not-powered')
             self.reasons.append('not-connected')
+
+        self.timestamp()
 
 
 class Mount(Activities, PoweredDevice):

@@ -1,8 +1,10 @@
+import datetime
+
 import win32com.client
 from typing import TypeAlias
 import logging
 from enum import Flag
-from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log
+from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log, TimeStamped
 from powered_device import PoweredDevice, PowerState
 from PlaneWave import pwi4_client
 
@@ -16,7 +18,7 @@ class FocuserActivities(Flag):
     ShuttingDown = (1 << 2)
 
 
-class FocuserStatus:
+class FocuserStatus(TimeStamped):
 
     activities: FocuserActivities = FocuserActivities.Idle
     is_operational: bool
@@ -44,6 +46,7 @@ class FocuserStatus:
 
         self.activities = f.activities
         self.activities_verbal = self.activities.name
+        self.timestamp()
 
 
 class Focuser(Activities, PoweredDevice):

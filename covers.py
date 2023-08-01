@@ -1,8 +1,10 @@
+import datetime
+
 import win32com.client
 import logging
 from enum import Enum, Flag
 from typing import TypeAlias
-from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log
+from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log, TimeStamped
 from powered_device import PoweredDevice
 
 
@@ -17,7 +19,7 @@ class CoverActivities(Flag):
     ShuttingDown = (1 << 3)
 
 
-class CoversStatus:
+class CoversStatus(TimeStamped):
     is_powered: bool
     is_connected: bool
     is_operational: bool
@@ -121,6 +123,7 @@ class Covers(Activities, PoweredDevice):
             st.is_operational = False
             st.reasons.append('not-powered')
             st.reasons.append('not-connected')
+        st.timestamp()
         return st
 
     @return_with_status

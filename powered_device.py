@@ -1,8 +1,8 @@
-
+import datetime
 from enum import Enum
 import time
 from typing import TypeAlias
-from utils import return_with_status
+from utils import return_with_status, TimeStamped
 
 PowerType: TypeAlias = "PoweredDevice"
 
@@ -63,7 +63,7 @@ class SocketStatus:
         self.state_verbal = state.name
 
 
-class PowerStatus:
+class PowerStatus(TimeStamped):
     sockets: list
     is_operational: bool = True
     reasons: list[str]
@@ -76,6 +76,7 @@ class PowerStatus:
             if socket.state != PowerState.On:
                 self.is_operational = False
                 self.reasons.append(f'socket[{socket.id.name}] is OFF')
+        self.timestamp()
 
 
 class PoweredDevice:

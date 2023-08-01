@@ -1,3 +1,5 @@
+import datetime
+
 import win32com.client
 from typing import TypeAlias
 import logging
@@ -5,7 +7,7 @@ import astropy.units as u
 from enum import Flag, Enum
 from utils import AscomDriverInfo, RepeatTimer, return_with_status
 from powered_device import PoweredDevice
-from utils import Activities, init_log
+from utils import Activities, init_log, TimeStamped
 
 CameraType: TypeAlias = "Camera"
 
@@ -32,7 +34,7 @@ class CameraActivities(Flag):
     ReadingOut = (1 << 5)
 
 
-class CameraStatus:
+class CameraStatus(TimeStamped):
 
     activities: CameraActivities
     is_operational: bool
@@ -66,6 +68,7 @@ class CameraStatus:
             self.reasons.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
+        self.timestamp()
 
 
 class Camera(Activities, PoweredDevice):
