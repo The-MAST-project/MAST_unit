@@ -633,9 +633,8 @@ class Unit(Activities):
             except psutil.NoSuchProcess:
                 pass
 
-        self.image_shm.close()
-        self.image_shm.unlink()
-
+        # self.image_shm.close()
+        # self.image_shm.unlink()
 
         self.camera.ascom.Connected = False
         self.mount.ascom.Connected = False
