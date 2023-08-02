@@ -139,8 +139,12 @@ class Focuser(Activities, PoweredDevice):
         """
         Sends the focuser to the specified position
 
+        Parameters
+        ----------
+        position
+            The target position
+
         :mastapi:
-        :param int position: Target position
         """
         if not self.is_powered:
             self.logger.info('Cannot goto - not-powered')
