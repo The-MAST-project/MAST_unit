@@ -223,6 +223,7 @@ class Camera(Activities, PoweredDevice):
         :mastapi:
 
         """
+        self.start_activity(CameraActivities.StartingUp, self.logger)
         if not self.is_powered:
             self.power_on()
         if not self.connected:
