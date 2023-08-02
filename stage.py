@@ -8,6 +8,7 @@ from powered_device import PoweredDevice
 import os
 import sys
 import platform
+import configparser
 
 StageStateType: TypeAlias = "StageState"
 
@@ -152,9 +153,18 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     self.min_travel = x_edges_settings.LeftBorder + 100
                     self.max_travel = x_edges_settings.RightBorder - 100
 
+                    config = configparser.ConfigParser()
+                    config.read_file(open('MAST-Settings.ini'))
+                    defaults = {
+                        'SciencePosition': 100000,
+                        'SkyPosition': 10000,
+                    }
+                    science_position = config.getint('stage', 'SciencePosition', vars=None, fallback=defaults)
+                    sky_position = config.getint('stage', 'SkyPosition', vars=None, fallback=defaults)
+
                     self.preset_positions = {
-                        StageState.AtScience:   (100000, StageActivities.MovingToScience, StageState.MovingToScience),   # TBD read from Settings
-                        StageState.AtSky:       (10000, StageActivities.MovingToSky, StageState.MovingToSky),       # TBD read from Settings
+                        StageState.AtScience:   (science_position, StageActivities.MovingToScience, StageState.MovingToScience),
+                        StageState.AtSky:       (sky_position, StageActivities.MovingToSky, StageState.MovingToSky),
                         StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
                         StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
                         StageState.AtMid:       ((self.max_travel - self.min_travel) / 2, StageActivities.MovingToMid, StageState.MovingToMid),
