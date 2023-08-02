@@ -155,12 +155,8 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
                     config = configparser.ConfigParser()
                     config.read_file(open('MAST-Settings.ini'))
-                    defaults = {
-                        'SciencePosition': 100000,
-                        'SkyPosition': 10000,
-                    }
-                    science_position = config.getint('stage', 'SciencePosition', vars=None, fallback=defaults)
-                    sky_position = config.getint('stage', 'SkyPosition', vars=None, fallback=defaults)
+                    science_position = config.getint('stage', 'SciencePosition', fallback=100000)
+                    sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
 
                     self.preset_positions = {
                         StageState.AtScience:   (science_position, StageActivities.MovingToScience, StageState.MovingToScience),
