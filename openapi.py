@@ -26,7 +26,8 @@ def make_parameters(method_name, method, docstring) -> list:
         TypeToSchema(str, {'type': 'string'}),
         TypeToSchema(Union[int, str], {'type': 'number', 'format': 'int32'}),
         TypeToSchema(Union[float, str], {'type': 'number', 'format': 'float'}),
-        TypeToSchema(Union[stage.StageState, str], {'type': 'string', 'enum': ['AtSky', 'AtScience']}),
+        TypeToSchema(Union[stage.StageState, str], {'type': 'string', 'enum': ['AtSky', 'AtScience', 'AtMin', 'AtMax', 'AtMid']}),
+        TypeToSchema(Union[stage.StageDirection, str], {'type': 'string', 'enum': ['Up', 'Down']}),
         TypeToSchema(Union[SocketId, str], {'type': 'string', 'enum': Socket.names()}),
     ]
 
@@ -77,6 +78,9 @@ def make_openapi_schema(app, subsystems: list[Subsystem]):
             if (sub.path == 'planewave' and method_name == 'status' or
                     method_name.startswith('mount_') or
                     method_name.startswith('focuser_') or
+                    method_name.startswith('stage_') or
+                    method_name.startswith('camera_') or
+                    method_name.startswith('covers_') or
                     method_name.startswith('virtualcamera_')) or \
                     Mastapi.is_api_method(method):
                 docstring = parse(method.__doc__.replace(':mastapi:\n', ''), style=DocstringStyle.NUMPYDOC) \
