@@ -30,14 +30,18 @@ class Activities:
     """
 
     activities: Flag
+    activity_start_times: dict = {}
 
     def start_activity(self, activity: Flag, logger):
+        self.activity_start_times[activity] = datetime.datetime.now()
         self.activities |= activity
         logger.info(f'activity {activity.name} - started')
 
     def end_activity(self, activity: Flag, logger):
+        duration = datetime.datetime.now() - self.activity_start_times[activity]
+        self.activity_start_times[activity] = None
         self.activities &= ~activity
-        logger.info(f'activity {activity.name} - ended')
+        logger.info(f'activity {activity.name} - ended (duration: {duration})')
 
     def is_active(self, activity: Flag) -> bool:
         return activity in self.activities
