@@ -25,7 +25,7 @@ if platform.system() == "Windows":
     else:
         os.environ["Path"] = lib_dir + ";" + os.environ["Path"]  # add dll path into an environment variable
 
-from pyximc import Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER, c_int, status_t
+from pyximc import Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER, c_int, status_t, edges_settings_t
 
 from pyximc import lib as ximclib
 
@@ -35,7 +35,16 @@ class StageActivities(Flag):
     StartingUp = (1 << 0)
     ShuttingDown = (1 << 1)
     MovingToScience = (1 << 2)
-    MovingToSki = (1 << 3)
+    MovingToSky = (1 << 3)
+    MovingToMin = (1 << 4)
+    MovingToMid = (1 << 5)
+    MovingToMax = (1 << 6)
+    MovingToTarget = (1 << 7)
+
+
+class StageDirection(Enum):
+    Up = 0
+    Down = 1
 
 
 class StageStatus(TimeStamped):
@@ -56,9 +65,16 @@ class StageState(Enum):
     Idle = 1
     AtScience = 2
     AtSky = 3
-    MovingToScience = 4
-    MovingToSky = 5
-    Error = 6
+    AtMin = 4
+    AtMid = 5
+    AtMax = 6
+    MovingToScience = 7
+    MovingToSky = 8
+    MovingToMin = 9
+    MovingToMid = 10
+    MovingToMax = 11
+    MovingToTarget = 12
+    Error = 13
 
 
 stage_state_str2int_dict: dict = {
@@ -66,17 +82,27 @@ stage_state_str2int_dict: dict = {
     'Idle': StageState.Idle,
     'AtScience': StageState.AtScience,
     'AtSky': StageState.AtSky,
+    'AtMin': StageState.AtMin,
+    'AtMid': StageState.AtMid,
+    'AtMax': StageState.AtMax,
     'MovingToScience': StageState.MovingToScience,
     'MovingToSky': StageState.MovingToSky,
+    'MovingToMin': StageState.MovingToMin,
+    'MovingToMid': StageState.MovingToMid,
+    'MovingToMax': StageState.MovingToMax,
+    'MovingToTarget': StageState.MovingToTarget,
     'Error': StageState.Error,
+}
+
+stage_direction_str2int_dict: dict = {
+    'Up': StageDirection.Up,
+    'Down': StageDirection.Down,
 }
 
 
 class Stage(Mastapi, Activities, PoweredDevice):
 
     POINTING_PRECISION = 10     # If within this distance of target and not moving, we arrived
-    POSITION_SCIENCE = 200000    # stage position when AtScience
-    POSITION_SKY = 10000        # stage position when AtSky
 
     logger: logging.Logger
     state: StageState
@@ -85,9 +111,11 @@ class Stage(Mastapi, Activities, PoweredDevice):
     ticks_at_target: int
     motion_start_time: datetime
     timer: RepeatTimer
-    device_name: bytes
+    device_uri: str
     _position: int | None = None
     is_moving: bool = False
+    preset_positions: dict
+    target: int | None = None
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
@@ -103,31 +131,44 @@ class Stage(Mastapi, Activities, PoweredDevice):
         self.timer.start()
         self.activities = StageActivities.Idle
 
-        result = ximclib.set_bindy_key(os.path.join(ximc_dir, "win32", "keyfile.sqlite").encode("utf-8"))
-        if result != Result.Ok:
-            ximclib.set_bindy_key("keyfile.sqlite".encode("utf-8")) # Search for the key file in the current directory.
-
         # This is device search and enumeration with probing. It gives more information about devices.
-        probe_flags = EnumerateFlags.ENUMERATE_PROBE + EnumerateFlags.ENUMERATE_NETWORK
+        probe_flags = EnumerateFlags.ENUMERATE_PROBE
         enum_hints = b"addr="
         dev_enum = ximclib.enumerate_devices(probe_flags, enum_hints)
 
         dev_count = ximclib.get_device_count(dev_enum)
         device_info = "No device"
         if dev_count > 0:
-            self.device_name = ximclib.get_device_name(dev_enum, 0)
-            dev = ximclib.open_device(self.device_name)
+            self.device_uri = ximclib.get_device_name(dev_enum, 0)
+            dev = ximclib.open_device(self.device_uri)
             if dev != -1:
                 x_device_information = device_information_t()
                 result = ximclib.get_device_information(dev, byref(x_device_information))
-                if result == Result.Ok:
-                    device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}".format(
-                        self.device_name[self.device_name.find(b'COM'):].decode(),
+                x_edges_settings = edges_settings_t()
+                result1 = ximclib.get_edges_settings(dev, byref(x_edges_settings))
+                if result == Result.Ok and result1 == Result.Ok:
+                    comport = str(self.device_uri)
+                    comport = comport[comport.find('COM'):]
+                    self.min_travel = x_edges_settings.LeftBorder + 100
+                    self.max_travel = x_edges_settings.RightBorder - 100
+
+                    self.preset_positions = {
+                        StageState.AtScience:   (100000, StageActivities.MovingToScience, StageState.MovingToScience),   # TBD read from Settings
+                        StageState.AtSky:       (10000, StageActivities.MovingToSky, StageState.MovingToSky),       # TBD read from Settings
+                        StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
+                        StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
+                        StageState.AtMid:       ((self.max_travel - self.min_travel) / 2, StageActivities.MovingToMid, StageState.MovingToMid),
+                    }
+
+                    device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
+                        comport,
                         repr(string_at(x_device_information.Manufacturer).decode()),
                         repr(string_at(x_device_information.ProductDescription).decode()),
                         repr(x_device_information.Major),
                         repr(x_device_information.Minor),
-                        repr(x_device_information.Release)
+                        repr(x_device_information.Release),
+                        self.min_travel,
+                        self.max_travel,
                     )
                 ximclib.close_device(byref(cast(dev, POINTER(c_int))))
 
@@ -143,7 +184,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
             return
 
         if value:
-            dev = ximclib.open_device(self.device_name)
+            dev = ximclib.open_device(self.device_uri)
             if dev != -1:
                 self.device = dev
                 self.state = StageState.Unknown
@@ -264,39 +305,33 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.is_moving = status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
             if not self.is_moving:
-                if Stage.close_enough(self.position, self.POSITION_SCIENCE, self.POINTING_PRECISION):
-                    self.state = StageState.AtScience
-                elif Stage.close_enough(self.position, self.POSITION_SKY, self.POINTING_PRECISION):
-                    self.state = StageState.AtSky
-                else:
+                if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target, self.POINTING_PRECISION):
+                    self.end_activity(StageActivities.MovingToTarget, self.logger)
                     self.state = StageState.Idle
+                    return
 
-        duration = None
-        if self.is_active(StageActivities.StartingUp) and self.state == StageState.AtScience:
-            self.end_activity(StageActivities.StartingUp, self.logger)
-            duration = datetime.datetime.now() - self.motion_start_time
-
-        if self.is_active(StageActivities.ShuttingDown) and self.state == StageState.AtSky:
-            self.end_activity(StageActivities.ShuttingDown, self.logger)
-            duration = datetime.datetime.now() - self.motion_start_time
-
-        if self.is_active(StageActivities.MovingToSki) and self.state == StageState.AtSky:
-            self.end_activity(StageActivities.MovingToSki, self.logger)
-            duration = datetime.datetime.now() - self.motion_start_time
-
-        if self.is_active(StageActivities.MovingToScience) and self.state == StageState.AtScience:
-            self.end_activity(StageActivities.MovingToScience, self.logger)
-            duration = datetime.datetime.now() - self.motion_start_time
-
-        if duration:
-            self.logger.info(f'motion duration: {duration}')
+                for state, tup in self.preset_positions.items():
+                    target = tup[0]
+                    activity = tup[1]
+                    if not self.is_active(activity):
+                        continue
+                    if Stage.close_enough(self.position, target, self.POINTING_PRECISION):
+                        self.state = state
+                        self.end_activity(activity, self.logger)
+                        break
+                self.state = StageState.Idle
 
     @return_with_status
     def move(self, where: StageState | str):
         """
-        Starts moving the stage to one of two pre-defined positions
+        Starts moving the stage to one of the preset positions
+
+        Parameters
+        ----------
+        where
+            Name of a preset position
+
         :mastapi:
-        :param where: Where to move the stage to (either StageState.AtScience or StageState.AtSky)
         """
         if not self.connected:
             return
@@ -307,16 +342,50 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.logger.info(f'move: already {where}')
             return
 
-        if where == StageState.AtScience:
-            self.state = StageState.MovingToScience
-            self.start_activity(StageActivities.MovingToScience, self.logger)
-            target = self.POSITION_SCIENCE
-        else:
-            self.state = StageState.MovingToSky
-            self.start_activity(StageActivities.MovingToSki, self.logger)
-            target = self.POSITION_SKY
+        preset = self.preset_positions[where]
+        target_position = preset[0]
+        new_activity = preset[1]
+        new_state = preset[2]
+        self.state = new_state
+        self.start_activity(new_activity, self.logger)
 
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
-        self.logger.info(f'move: at {self.position} started moving to {target} (state={self.state})')
-        ximclib.command_move(self.device, target, 0)
+        self.logger.info(f'move: at {self.position} started moving to {target_position} (state={self.state})')
+        try:
+            response = ximclib.command_move(self.device, target_position, 0)
+            if response != Result.Ok:
+                self.logger.error(f'Failed to start stage move (command_move({self.device}, {target_position}, 0)')
+                return
+        except Exception as ex:
+            self.logger.exception(f'Failed to start stage move (command_move({self.device}, {target_position}, 0)', ex)
+
+    @return_with_status
+    def move_microns(self, direction: StageDirection | str, amount: int | str):
+        """
+        Starts moving the stage in the specified direction by the specified number of microns
+
+        Parameters
+        ----------
+        direction
+            The direction to move (**Up**: away from the motor, **Down**: towards the motor)
+        amount
+            How many microns to move
+        :mastapi:
+        """
+        if isinstance(direction, str):
+            direction = StageDirection(stage_direction_str2int_dict[direction])
+        if isinstance(amount, str):
+            amount = int(amount)
+
+        amount *= 1 if direction == StageDirection.Up else -1
+        try:
+            response = ximclib.command_movr(self.device, amount, 0)
+            if response != Result.Ok:
+                self.logger.error(f'Failed to start stage move (command_movr({self.device}, {amount})')
+                return
+            self.target = self.position + amount
+            self.state = StageState.MovingToTarget
+            self.start_activity(StageActivities.MovingToTarget, self.logger)
+        except Exception as ex:
+            self.logger.exception(f'Failed to start stage move relative (command_movr({self.device}, {amount})', ex)
