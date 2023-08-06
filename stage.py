@@ -1,4 +1,5 @@
 import logging
+import threading
 from enum import Enum, Flag
 import datetime
 from utils import RepeatTimer, return_with_status, Activities, init_log, TimeStamped
@@ -117,6 +118,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
     is_moving: bool = False
     preset_positions: dict
     target: int | None = None
+    stage_lock: threading.Lock
+    science_position: int
+    sky_position: int
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
@@ -127,7 +131,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
         self.device = None
         self.state = StageState.Unknown
 
-        self.timer = RepeatTimer(1, function=self.ontimer)
+        self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'stage-timer-thread'
         self.timer.start()
         self.activities = StageActivities.Idle
@@ -155,15 +159,15 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
                     config = configparser.ConfigParser()
                     config.read_file(open('MAST-Settings.ini'))
-                    science_position = config.getint('stage', 'SciencePosition', fallback=100000)
-                    sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
+                    self.science_position = config.getint('stage', 'SciencePosition', fallback=100000)
+                    self.sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
 
                     self.preset_positions = {
-                        StageState.AtScience:   (science_position, StageActivities.MovingToScience, StageState.MovingToScience),
-                        StageState.AtSky:       (sky_position, StageActivities.MovingToSky, StageState.MovingToSky),
+                        StageState.AtScience:   (self.science_position, StageActivities.MovingToScience, StageState.MovingToScience),
+                        StageState.AtSky:       (self.sky_position, StageActivities.MovingToSky, StageState.MovingToSky),
                         StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
                         StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
-                        StageState.AtMid:       ((self.max_travel - self.min_travel) / 2, StageActivities.MovingToMid, StageState.MovingToMid),
+                        StageState.AtMid:       (int((self.max_travel - self.min_travel) / 2), StageActivities.MovingToMid, StageState.MovingToMid),
                     }
 
                     device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
@@ -178,6 +182,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     )
                 ximclib.close_device(byref(cast(dev, POINTER(c_int))))
 
+        self.stage_lock = threading.Lock()
         self.logger.info(f'initialized ({device_info})')
 
     @property
@@ -263,7 +268,8 @@ class Stage(Mastapi, Activities, PoweredDevice):
     @position.setter
     def position(self, value):
         if self.connected:
-            result = ximclib.command_move(self.device, value)
+            with self.stage_lock:
+                result = ximclib.command_move(self.device, value)
             if result != Result.Ok:
                 raise Exception(f'Could not start move to {value}')
 
@@ -305,7 +311,8 @@ class Stage(Mastapi, Activities, PoweredDevice):
             return
 
         status = status_t()
-        result = ximclib.get_status(self.device, byref(status))
+        with self.stage_lock:
+            result = ximclib.get_status(self.device, byref(status))
         if result == Result.Ok:
             self._position = status.CurPosition
             self.is_moving = status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
@@ -313,8 +320,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
             if not self.is_moving:
                 if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target, self.POINTING_PRECISION):
                     self.end_activity(StageActivities.MovingToTarget, self.logger)
-                    self.state = StageState.Idle
-                    return
+
+                if self.is_active(StageActivities.StartingUp) and Stage.close_enough(self.position, self.science_position, self.POINTING_PRECISION):
+                    self.end_activity(StageActivities.StartingUp, self.logger)
 
                 for state, tup in self.preset_positions.items():
                     target = tup[0]
@@ -325,7 +333,8 @@ class Stage(Mastapi, Activities, PoweredDevice):
                         self.state = state
                         self.end_activity(activity, self.logger)
                         break
-                self.state = StageState.Idle
+
+                # self.state = StageState.Idle
 
     @return_with_status
     def move(self, where: StageState | str):
@@ -359,7 +368,8 @@ class Stage(Mastapi, Activities, PoweredDevice):
         self.motion_start_time = datetime.datetime.now()
         self.logger.info(f'move: at {self.position} started moving to {target_position} (state={self.state})')
         try:
-            response = ximclib.command_move(self.device, target_position, 0)
+            with self.stage_lock:
+                response = ximclib.command_move(self.device, target_position, 0)
             if response != Result.Ok:
                 self.logger.error(f'Failed to start stage move (command_move({self.device}, {target_position}, 0)')
                 return
@@ -382,16 +392,17 @@ class Stage(Mastapi, Activities, PoweredDevice):
         if isinstance(direction, str):
             direction = StageDirection(stage_direction_str2int_dict[direction])
         if isinstance(amount, str):
-            amount = int(amount)
+            amount = abs(int(amount))
 
         amount *= 1 if direction == StageDirection.Up else -1
         try:
-            response = ximclib.command_movr(self.device, amount, 0)
-            if response != Result.Ok:
-                self.logger.error(f'Failed to start stage move (command_movr({self.device}, {amount})')
-                return
             self.target = self.position + amount
             self.state = StageState.MovingToTarget
             self.start_activity(StageActivities.MovingToTarget, self.logger)
+            with self.stage_lock:
+                response = ximclib.command_movr(self.device, amount, 0)
+            if response != Result.Ok:
+                self.logger.error(f'Failed to start stage move (command_movr({self.device}, {amount})')
+                return
         except Exception as ex:
             self.logger.exception(f'Failed to start stage move relative (command_movr({self.device}, {amount})', ex)
