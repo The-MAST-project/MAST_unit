@@ -1,5 +1,3 @@
-import datetime
-
 import win32com.client
 from typing import TypeAlias
 import logging
@@ -7,6 +5,7 @@ from enum import Flag
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log, TimeStamped
 from powered_device import PoweredDevice, PowerState
 from PlaneWave import pwi4_client
+from mastapi import Mastapi
 
 FocuserType: TypeAlias = "Focuser"
 
@@ -49,7 +48,7 @@ class FocuserStatus(TimeStamped):
         self.timestamp()
 
 
-class Focuser(Activities, PoweredDevice):
+class Focuser(Mastapi, Activities, PoweredDevice):
 
     logger: logging.Logger
     pw: pwi4_client
@@ -157,6 +156,22 @@ class Focuser(Activities, PoweredDevice):
             position = int(position)
         self.start_activity(FocuserActivities.Moving, self.logger)
         self.pw.focuser_goto(position)
+
+    def abort(self):
+        """
+        Aborts any in-progress focuser activities
+
+        :mastapi:
+        Returns
+        -------
+
+        """
+        if self.is_active(FocuserActivities.Moving):
+            self.pw.focuser_stop()
+            self.end_activity(FocuserActivities.Moving, self.logger)
+
+        if self.is_active(FocuserActivities.StartingUp):
+            self.end_activity(FocuserActivities.StartingUp, self.logger)
 
     def ontimer(self):
         stat = self.pw.status()
