@@ -5,7 +5,6 @@ import psutil
 import guiding
 import utils
 from PlaneWave import pwi4_client
-from PlaneWave.platesolve import platesolve
 import time
 from typing import TypeAlias
 import camera
@@ -13,11 +12,10 @@ import covers
 import stage
 import mount
 import focuser
-from powered_device import PowerStatus,SocketId, PoweredDevice, sockets
+from powered_device import PowerStatus, SocketId, PoweredDevice, sockets
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
-import tempfile
 import numpy as np
 from utils import return_with_status, Activities, RepeatTimer
 from enum import Flag
@@ -29,7 +27,6 @@ import os
 import subprocess
 from enum import Enum
 import json
-from guiding import *
 
 UnitType: TypeAlias = "Unit"
 
@@ -401,7 +398,8 @@ class Unit(Activities):
                 delta_ra_arcsec = delta_ra / (60 * 60)
                 delta_dec_arcsec = delta_dec / (60 * 60)
 
-                self.logger.info(f'telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, dec={delta_dec_arcsec:.10f}arcsec')
+                self.logger.info(f'telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, '
+                                 f'dec={delta_dec_arcsec:.10f}arcsec')
                 self.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
             else:
                 pass  # TBD
@@ -539,6 +537,40 @@ class Unit(Activities):
         :mastapi:
         """
         return UnitStatus(self)
+
+    def quit(self):
+        """
+        Quits the application
+
+        :mastapi:
+        Returns
+        -------
+
+        """
+        from app import app_quit
+        app_quit()
+
+    def abort(self):
+        """
+        Aborts any in-progress mount activity
+
+        :mastapi:
+        Returns
+        -------
+
+        """
+        if self.is_active(UnitActivities.Guiding):
+            self.stop_guiding()
+
+        if self.is_active(UnitActivities.Autofocusing):
+            self.stop_autofocus()
+
+        if self.is_active(UnitActivities.StartingUp):
+            self.mount.abort()
+            self.camera.abort()
+            self.focuser.abort()
+            self.stage.abort()
+            self.covers.abort()
 
     def test_solving(self, exposure_seconds: int | str):
         """
