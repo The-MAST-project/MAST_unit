@@ -1,5 +1,3 @@
-import datetime
-
 import win32com.client
 from typing import TypeAlias
 import logging
@@ -8,6 +6,7 @@ from enum import Flag, Enum
 from utils import AscomDriverInfo, RepeatTimer, return_with_status
 from powered_device import PoweredDevice
 from utils import Activities, init_log, TimeStamped
+from mastapi import Mastapi
 
 CameraType: TypeAlias = "Camera"
 
@@ -36,7 +35,6 @@ class CameraActivities(Flag):
 
 class CameraStatus(TimeStamped):
 
-    activities: CameraActivities
     is_operational: bool
     temperature: float
     cooler_power: float  # percent
@@ -71,7 +69,7 @@ class CameraStatus(TimeStamped):
         self.timestamp()
 
 
-class Camera(Activities, PoweredDevice):
+class Camera(Mastapi, Activities, PoweredDevice):
 
     logger: logging.Logger
     _connected: bool = False
@@ -87,12 +85,12 @@ class Camera(Activities, PoweredDevice):
     RadX: float
     RadY: float
     ascom = None
-    activities: CameraActivities = CameraActivities.Idle
     timer: RepeatTimer
     image = None
     last_state: CameraState = None
+    activities: CameraActivities = CameraActivities.Idle
 
-    def __init__(self, driver: str, set_point: float = None):
+    def __init__(self, driver: str):
         self.logger = logging.getLogger('mast.unit.camera')
         init_log(self.logger)
         try:
@@ -202,7 +200,7 @@ class Camera(Activities, PoweredDevice):
             return
 
         if self.is_active(CameraActivities.Exposing):
-            self.ascom.StopExposure() # the timer will read the image
+            self.ascom.StopExposure()  # the timer will read the image
 
     def status(self) -> CameraStatus:
         """
@@ -272,8 +270,20 @@ class Camera(Activities, PoweredDevice):
             self.start_activity(CameraActivities.WarmingUp, self.logger)
             temp = self.ascom.CCDTemperature
 
-            self.logger.info(f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
+            self.logger.info(
+                f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
             self.ascom.SetCCDTemperature(self.warm_set_point)
+
+    def abort(self):
+        """
+        :mastapi:
+        Returns
+        -------
+
+        """
+        if self.is_active(CameraActivities.Exposing):
+            self.ascom.AbortExposure()
+            self.end_activity(CameraActivities.Exposing, self.logger)
 
     def ontimer(self):
         """
