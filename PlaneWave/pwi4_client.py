@@ -703,6 +703,10 @@ class PWI4HttpCommunicator:
         error_details = None
         try:
             response = urlopen(url, data=postdata, timeout=self.timeout_seconds)
+
+        except (urllib.error.URLError, ConnectionRefusedError) as ex:
+            raise PWException(message=f'request: Could not open the URL {url}.  Maybe PWI4 is not running !?!')
+
         except HTTPError as e:
             if e.code == 404:
                 error_message = "Command not found"
@@ -720,9 +724,6 @@ class PWI4HttpCommunicator:
                 pass # If that failed, we won't include any further details
             
             raise PWException(message=f'request: HTTPError: error_message={error_message}, error_details: {error_details}')
-
-        except urllib.error.URLError:
-            raise PWException(message=f'request: Could not open the URL {url}.  Maybe PWI4 is not running !?!')
 
         except Exception as e:
             # This will often be a urllib2.URLError to indicate that a connection
