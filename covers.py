@@ -6,6 +6,7 @@ from enum import Enum, Flag
 from typing import TypeAlias
 from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log, TimeStamped
 from powered_device import PoweredDevice
+from mastapi import Mastapi
 
 
 CoversStateType: TypeAlias = "CoversState"
@@ -38,14 +39,14 @@ class CoversState(Enum):
     Error = 5
 
 
-class Covers(Activities, PoweredDevice):
+class Covers(Mastapi, Activities, PoweredDevice):
     """
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
     logger: logging.Logger
     ascom = None
     timer: RepeatTimer
-    activities: Activities = CoverActivities.Idle
+    activities: CoverActivities = CoverActivities.Idle
 
     def __init__(self, driver: str):
         self.logger = logging.getLogger('mast.unit.covers')
@@ -57,6 +58,7 @@ class Covers(Activities, PoweredDevice):
             raise ex
 
         PoweredDevice.__init__(self, 'Covers', self)
+        Activities.__init__(self)
 
         self.timer = RepeatTimer(2, self.ontimer)
         self.timer.name = 'covers-timer-thread'
@@ -116,6 +118,8 @@ class Covers(Activities, PoweredDevice):
                     st.reasons.append(f'state is {st.state} instead of {CoversState.Open}')
                 st.state = self.state()
                 st.state_verbal = st.state.name
+                st.activities = self.activities
+                st.activities_verbal = self.activities.name
             else:
                 st.reasons.append('not-connected')
         else:
@@ -181,6 +185,19 @@ class Covers(Activities, PoweredDevice):
         self.start_activity(CoverActivities.ShuttingDown, self.logger)
         if self.state() != CoversState.Closed:
             self.close()
+
+    def abort(self):
+        """
+        :mastapi:
+        Returns
+        -------
+
+        """
+        self.ascom.HaltCover()
+        for activity in (CoverActivities.StartingUp, CoverActivities.ShuttingDown,
+                         CoverActivities.Closing, CoverActivities.Opening):
+            if self.is_active(activity):
+                self.end_activity(activity, self.logger)
 
     def ontimer(self):
         if not self.connected:
