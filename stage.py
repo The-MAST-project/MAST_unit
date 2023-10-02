@@ -14,8 +14,8 @@ import configparser
 StageStateType: TypeAlias = "StageState"
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))  # Specifies the current directory.
-ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")  # Formation of the directory name with all dependencies. The dependencies for the examples are located in the ximc directory.
-ximc_package_dir = os.path.join(ximc_dir, "crossplatform", "wrappers", "python")  # Formation of the directory name with python dependencies.
+ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")  # dependencies for examples are in ximc directory.
+ximc_package_dir = os.path.join(ximc_dir, "crossplatform", "wrappers", "python")
 sys.path.append(ximc_package_dir)  # add pyximc.py wrapper to python path
 
 if platform.system() == "Windows":
@@ -27,9 +27,9 @@ if platform.system() == "Windows":
     else:
         os.environ["Path"] = lib_dir + ";" + os.environ["Path"]  # add dll path into an environment variable
 
-from pyximc import Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER, c_int, status_t, edges_settings_t
-
-from pyximc import lib as ximclib
+    from pyximc import (Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER, c_int,
+                        status_t, edges_settings_t)
+    from pyximc import lib as ximclib
 
 
 class StageActivities(Flag):
@@ -121,6 +121,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
     stage_lock: threading.Lock
     science_position: int
     sky_position: int
+    activities: StageActivities = StageActivities.Idle
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
@@ -163,11 +164,14 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     self.sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
 
                     self.preset_positions = {
-                        StageState.AtScience:   (self.science_position, StageActivities.MovingToScience, StageState.MovingToScience),
-                        StageState.AtSky:       (self.sky_position, StageActivities.MovingToSky, StageState.MovingToSky),
+                        StageState.AtScience:   (self.science_position, StageActivities.MovingToScience,
+                                                 StageState.MovingToScience),
+                        StageState.AtSky:       (self.sky_position, StageActivities.MovingToSky,
+                                                 StageState.MovingToSky),
                         StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
                         StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
-                        StageState.AtMid:       (int((self.max_travel - self.min_travel) / 2), StageActivities.MovingToMid, StageState.MovingToMid),
+                        StageState.AtMid:       (int((self.max_travel - self.min_travel) / 2),
+                                                 StageActivities.MovingToMid, StageState.MovingToMid),
                     }
 
                     device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
@@ -318,10 +322,13 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.is_moving = status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
             if not self.is_moving:
-                if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target, self.POINTING_PRECISION):
+                if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target,
+                                                                                         self.POINTING_PRECISION):
                     self.end_activity(StageActivities.MovingToTarget, self.logger)
 
-                if self.is_active(StageActivities.StartingUp) and Stage.close_enough(self.position, self.science_position, self.POINTING_PRECISION):
+                if self.is_active(StageActivities.StartingUp) and Stage.close_enough(self.position,
+                                                                                     self.science_position,
+                                                                                     self.POINTING_PRECISION):
                     self.end_activity(StageActivities.StartingUp, self.logger)
 
                 for state, tup in self.preset_positions.items():
@@ -406,3 +413,19 @@ class Stage(Mastapi, Activities, PoweredDevice):
                 return
         except Exception as ex:
             self.logger.exception(f'Failed to start stage move relative (command_movr({self.device}, {amount})', ex)
+
+    def abort(self):
+        """
+        Aborts any in-progress stage activities
+
+        :mastapi:
+        Returns
+        -------
+
+        """
+        for activity in (StageActivities.StartingUp, StageActivities.MovingToMax, StageActivities.MovingToMid,
+                         StageActivities.MovingToMin, StageActivities.MovingToScience, StageActivities.MovingToSky,
+                         StageActivities.MovingToTarget):
+            if self.is_active(activity):
+                self.end_activity(activity, self.logger)
+        ximclib.command_stop(self.device)
