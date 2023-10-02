@@ -8,6 +8,10 @@ from mastapi import Mastapi
 from openapi import make_openapi_schema
 import logging
 from contextlib import asynccontextmanager
+import psutil
+import os
+
+from sys import exit
 
 unit_id = 17
 logger = logging.Logger('mast')
@@ -17,7 +21,11 @@ unit = None
 pw = None
 try:
     pw = pwi4_client.PWI4()
+    pw.status()
     unit = Unit(unit_id)
+except pwi4_client.PWException as ex:
+    logger.error('No PWI4', exc_info=ex)
+    exit(1)
 except Exception as ex:
     logger.error('Could not create a Unit object', exc_info=ex)
 
@@ -55,6 +63,15 @@ subsystems = [
 make_openapi_schema(app=app, subsystems=subsystems)
 
 
+def app_quit():
+    logger.info('Quiting at API request')
+    parent_pid = os.getpid()
+    parent = psutil.Process(parent_pid)
+    for child in parent.children(recursive=True):  # or parent.children() for recursive=False
+        child.kill()
+    parent.kill()
+
+
 @app.get(root + '{subsystem}/{method}', response_class=PrettyJSONResponse)
 def do_item(subsystem: str, method: str, request: Request):
 
@@ -67,6 +84,9 @@ def do_item(subsystem: str, method: str, request: Request):
     api_method_tuples = [t for t in all_method_tuples if Mastapi.is_api_method(t[1]) or (sub.path == 'planewave' and not t[0].startswith('_'))]
     api_method_names = [t[0] for t in api_method_tuples]
     api_method_objects = [t[1] for t in api_method_tuples]
+
+    if method == 'quit':
+        app_quit()
 
     if method == 'help':
         responses = list()
