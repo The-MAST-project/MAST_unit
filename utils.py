@@ -189,8 +189,8 @@ def return_with_status(func):
                 status_method = tup[1]
                 break
 
+        ret.result = None
         ret.error = None
-        ret.response = None
         try:
             ret.result = func(*args, **kwargs)
         except Exception as ex:
@@ -221,6 +221,9 @@ class Subsystem:
     path: str
     obj: object
     obj_name: str
+    method_objects: list[object]
+    method_names: list[str]
+    method_docs: list[str]
 
     def __init__(self, path: str, obj: object, obj_name: str):
         self.path = path
