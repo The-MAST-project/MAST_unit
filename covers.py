@@ -94,8 +94,12 @@ class Covers(Mastapi, Activities, PoweredDevice):
         try:
             self.ascom.Connected = value
         except Exception as ex:
-            self.logger.error(f"failed to set connected to '{value}'", exc_info=ex)
-            self.ascom.Connected = value
+            if (hasattr(ex, "excepinfo") and ex.excepinfo[1] == "PWShutter_ASCOM" and
+                    ex.excepinfo[2] == "Unable to connect to PWShutter: got error code 255"):
+                pass
+            else:
+                self.logger.error(f"failed to set connected to '{value}'", exc_info=ex)
+                self.ascom.Connected = value
 
     def state(self) -> CoversState:
         return CoversState(self.ascom.CoverState)
