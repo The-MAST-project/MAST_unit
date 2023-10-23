@@ -3,4 +3,4 @@
 /src/PlateSolveSimulator/PSSimulator.log
 /venv.1/
 /src/PlateSolveSimulator/images/
-*/__pycache__/
+**/__pycache__/
