@@ -15,7 +15,6 @@ from fastapi.staticfiles import StaticFiles
 
 unit_id = 17
 logger = logging.Logger('mast')
-logger.setLevel(logging.DEBUG)
 init_log(logger)
 unit = None
 pw = None

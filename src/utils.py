@@ -17,6 +17,8 @@ import time
 from multiprocessing import shared_memory
 
 
+default_log_level = logging.DEBUG
+
 class RepeatTimer(Timer):
     def run(self):
         while not self.finished.wait(self.interval):
@@ -137,16 +139,16 @@ class DailyFileHandler(logging.FileHandler):
 
 def init_log(logger: logging.Logger):
     logger.propagate = False
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(default_log_level)
     handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(default_log_level)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s}' +
                                   ' -  %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
     handler = DailyFileHandler(path='app.log', mode='a')
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(default_log_level)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 

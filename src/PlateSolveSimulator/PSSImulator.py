@@ -18,6 +18,7 @@ image_params_dict: dict
 
 image_dir = 'images'
 logger = logging.getLogger('PSSimulator')
+default_log_level = logging.DEBUG
 
 
 class ImageCounter:
@@ -85,15 +86,15 @@ def solve_image(params: dict) -> dict:
 
 
 def init_log(lg: logging.Logger):
-    lg.setLevel(logging.DEBUG)
+    lg.setLevel(default_log_level)
     handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(default_log_level)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - {%(name)s:%(threadName)s:%(thread)s} - %(message)s')
     handler.setFormatter(formatter)
     lg.addHandler(handler)
 
     handler = logging.FileHandler(filename='PSSimulator.log', mode='a')
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(default_log_level)
     handler.setFormatter(formatter)
     lg.addHandler(handler)
 
