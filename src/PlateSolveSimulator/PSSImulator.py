@@ -9,6 +9,7 @@ import os
 import logging
 import guiding
 import json
+from unit import GUIDING_SHM_NAME
 
 image_params_shm: SharedMemory | None = None
 image_shm: SharedMemory | None = None
@@ -107,23 +108,15 @@ if __name__ == '__main__':
     logger.info('---------------')
 
     #
-    # The shared resources (semaphore and shared memory segments) get created
-    #  by the guiding software.  We can only patiently wait for them to get created before we
-    #  can use them
+    # Wait patiently for the guiding software to create the memory segment
     #
-    got_memory_segment = False
-    while not got_memory_segment:
+    image_shm = None
+    while not image_shm:
         try:
-            image_shm = SharedMemory(name='PlateSolving_Image')
-            got_memory_segment = True
+            image_shm = SharedMemory(name=GUIDING_SHM_NAME)
         except FileNotFoundError:
-            logger.info("Waiting for the shared resources (not found, sleeping 2) ...")
+            logger.info("Waiting for the shared memory segment (not found, sleeping 2) ...")
             sleep(2)
-            continue
-
-        if not got_memory_segment:
-            logger.info("Waiting for the shared resources ...")
-            sleep(5)
 
     hello = {
         'ready': True,

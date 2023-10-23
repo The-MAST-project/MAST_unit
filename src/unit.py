@@ -30,6 +30,8 @@ import json
 
 UnitType: TypeAlias = "Unit"
 
+GUIDING_SHM_NAME = 'PlateSolving_Image'
+
 
 class GuideDirections(Enum):
     guideNorth = 0
@@ -111,6 +113,7 @@ class Unit(Activities):
     _is_autofocusing = False
     id = None
     activities: UnitActivities = UnitActivities.Idle
+    shm: SharedMemory
 
     reasons: list = []   # list of reasons for the last failure
     mount: mount
@@ -123,7 +126,6 @@ class Unit(Activities):
     plate_solver_process: psutil.Process | subprocess.Popen
 
     # Stuff for plate solving
-    image_shm: SharedMemory = None
     was_tracking_before_guiding: bool
     sock_to_solver = None
 
@@ -220,14 +222,6 @@ class Unit(Activities):
         self.covers.connected = value
         self.stage.connected = value
         self.focuser.connected = value
-
-        if value:
-            # it's only at this stage that we know the imager size
-            try:
-                self.image_shm = SharedMemory(name='PlateSolving_Image')
-            except FileNotFoundError:
-                size = self.camera.ascom.NumX * self.camera.ascom.NumY * 4
-                self.image_shm = SharedMemory(name='PlateSolving_Image', create=True, size=size)
 
     @return_with_status
     def connect(self):
@@ -345,9 +339,16 @@ class Unit(Activities):
                 self.end_guiding()
                 return
 
+            image = self.camera.image
+            if not self.shm:
+                try:
+                    self.shm = SharedMemory(name=GUIDING_SHM_NAME)
+                except FileNotFoundError:
+                    self.shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=image.nbytes)
+
             self.logger.info(f'guiding exposure done, getting the image from the camera')
-            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=np.uint32, buffer=self.image_shm.buf)
-            shared_image[:] = self.camera.image[:]
+            shared_image = np.ndarray(image.shape, dtype=image.dtype, buffer=self.shm.buf)
+            shared_image[:] = image[:]
             self.logger.info(f'copied image to shared memory')
 
             if not self.is_active(UnitActivities.Guiding):
@@ -435,9 +436,6 @@ class Unit(Activities):
             self.logger.info('started mount tracking')
 
         self.start_activity(UnitActivities.Guiding, self.logger)
-        if not self.image_shm:
-            self.image_shm = SharedMemory(name='PlateSolving_Image', create=True,
-                                          size=(self.camera.NumX * self.camera.NumY * 4))
         Thread(name='guiding-thread', target=self.do_guide).start()
 
     @return_with_status
@@ -665,8 +663,8 @@ class Unit(Activities):
             except psutil.NoSuchProcess:
                 pass
 
-        # self.image_shm.close()
-        # self.image_shm.unlink()
+        self.shm.close()
+        self.shm.unlink()
 
         self.camera.ascom.Connected = False
         self.mount.ascom.Connected = False
