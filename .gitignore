@@ -1,5 +1,6 @@
 /venv/
-/PlateSolveSimulator/.pid
-/PlateSolveSimulator/PSSimulator.log
+/src/PlateSolveSimulator/.pid
+/src/PlateSolveSimulator/PSSimulator.log
 /venv.1/
-/PlateSolveSimulator/images/
+/src/PlateSolveSimulator/images/
+**/__pycache__/
