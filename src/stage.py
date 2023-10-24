@@ -10,6 +10,7 @@ import os
 import sys
 import platform
 import configparser
+from collections import namedtuple
 
 StageStateType: TypeAlias = "StageState"
 
@@ -36,12 +37,13 @@ class StageActivities(Flag):
     Idle = 0
     StartingUp = (1 << 0)
     ShuttingDown = (1 << 1)
-    MovingToScience = (1 << 2)
-    MovingToSky = (1 << 3)
-    MovingToMin = (1 << 4)
-    MovingToMid = (1 << 5)
-    MovingToMax = (1 << 6)
-    MovingToTarget = (1 << 7)
+    Moving = (1 << 2)
+    # MovingToScience = (1 << 2)
+    # MovingToSky = (1 << 3)
+    # MovingToMin = (1 << 4)
+    # MovingToMid = (1 << 5)
+    # MovingToMax = (1 << 6)
+    # MovingToTarget = (1 << 7)
 
 
 class StageDirection(Enum):
@@ -70,13 +72,15 @@ class StageState(Enum):
     AtMin = 4
     AtMid = 5
     AtMax = 6
-    MovingToScience = 7
-    MovingToSky = 8
-    MovingToMin = 9
-    MovingToMid = 10
-    MovingToMax = 11
-    MovingToTarget = 12
-    Error = 13
+    # MovingToScience = 7
+    # MovingToSky = 8
+    # MovingToMin = 9
+    # MovingToMid = 10
+    # MovingToMax = 11
+    # MovingToTarget = 12
+    # Error = 13
+    Moving = 7
+    Error = 8
 
 
 stage_state_str2int_dict: dict = {
@@ -87,12 +91,13 @@ stage_state_str2int_dict: dict = {
     'AtMin': StageState.AtMin,
     'AtMid': StageState.AtMid,
     'AtMax': StageState.AtMax,
-    'MovingToScience': StageState.MovingToScience,
-    'MovingToSky': StageState.MovingToSky,
-    'MovingToMin': StageState.MovingToMin,
-    'MovingToMid': StageState.MovingToMid,
-    'MovingToMax': StageState.MovingToMax,
-    'MovingToTarget': StageState.MovingToTarget,
+    # 'MovingToScience': StageState.MovingToScience,
+    # 'MovingToSky': StageState.MovingToSky,
+    # 'MovingToMin': StageState.MovingToMin,
+    # 'MovingToMid': StageState.MovingToMid,
+    # 'MovingToMax': StageState.MovingToMax,
+    # 'MovingToTarget': StageState.MovingToTarget,
+    'Moving': StageState.Moving,
     'Error': StageState.Error,
 }
 
@@ -101,10 +106,11 @@ stage_direction_str2int_dict: dict = {
     'Down': StageDirection.Down,
 }
 
+POSITIONING_PRECISION = 10  # If within this distance of target and not moving, we arrived
+PresetPosition = namedtuple("Preset", ["name", "position"])
+
 
 class Stage(Mastapi, Activities, PoweredDevice):
-
-    POINTING_PRECISION = 10     # If within this distance of target and not moving, we arrived
 
     logger: logging.Logger
     state: StageState
@@ -122,6 +128,11 @@ class Stage(Mastapi, Activities, PoweredDevice):
     science_position: int
     sky_position: int
     activities: StageActivities = StageActivities.Idle
+
+    simulated: True
+    sim_connected: False
+    sim_increment_per_timer_tick: 100
+    sim_target: None
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
@@ -164,14 +175,11 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     self.sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
 
                     self.preset_positions = {
-                        StageState.AtScience:   (self.science_position, StageActivities.MovingToScience,
-                                                 StageState.MovingToScience),
-                        StageState.AtSky:       (self.sky_position, StageActivities.MovingToSky,
-                                                 StageState.MovingToSky),
-                        StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
-                        StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
-                        StageState.AtMid:       (int((self.max_travel - self.min_travel) / 2),
-                                                 StageActivities.MovingToMid, StageState.MovingToMid),
+                        StageState.AtScience:   self.science_position,
+                        StageState.AtSky:       self.sky_position,
+                        StageState.AtMin:       self.min_travel,
+                        StageState.AtMax:       self.max_travel,
+                        StageState.AtMid:       int((self.max_travel - self.min_travel) / 2),
                     }
 
                     device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
@@ -185,16 +193,24 @@ class Stage(Mastapi, Activities, PoweredDevice):
                         self.max_travel,
                     )
                 ximclib.close_device(byref(cast(dev, POINTER(c_int))))
+                self.stage_lock = threading.Lock()
+                self.simulated = False
 
-        self.stage_lock = threading.Lock()
         self.logger.info(f'initialized ({device_info})')
 
     @property
     def connected(self) -> bool:
+        if self.simulated:
+            return self.sim_connected
+
         return self.device is not None
 
     @connected.setter
     def connected(self, value):
+        if self.simulated:
+            self.sim_connected = value
+            return
+
         if not self.is_powered:
             return
 
@@ -241,6 +257,12 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if self.simulated:
+            self.is_powered = True
+            self.connect()
+            self.state = StageState.AtScience
+            return
+
         if not self.is_powered:
             self.power_on()
         if not self.connected:
@@ -256,6 +278,12 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if self.simulated:
+            self.state = StageState.AtScience
+            self.disconnect()
+            self.is_powered = False
+            return
+
         if not self.is_powered:
             return
 
@@ -307,11 +335,27 @@ class Stage(Mastapi, Activities, PoweredDevice):
         return st
 
     @staticmethod
-    def close_enough(position, target, epsilon):
-        return abs(position - target) <= epsilon
+    def close_enough(position, target):
+        return abs(position - target) <= POSITIONING_PRECISION
 
     def ontimer(self):
+
         if not self.connected:
+            return
+
+        if self.simulated:
+            if self.is_active(StageActivities.Moving):
+                if Stage.close_enough(self.position, self.target):
+                    self.end_activity(StageActivities.Moving, logger=self.logger)
+                    self.target = None
+                    return
+
+                distance_to_target = abs(self.target - self.position)
+                increment = self.sim_increment_per_timer_tick if self.target > self.position \
+                    else -self.sim_increment_per_timer_tick
+                if distance_to_target > self.sim_increment_per_timer_tick:
+                    self._position += increment
+                    return
             return
 
         status = status_t()
@@ -322,13 +366,11 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.is_moving = status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
             if not self.is_moving:
-                if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target,
-                                                                                         self.POINTING_PRECISION):
-                    self.end_activity(StageActivities.MovingToTarget, self.logger)
+                if self.is_active(StageActivities.Moving) and Stage.close_enough(self.position, self.target):
+                    self.end_activity(StageActivities.Moving, self.logger)
 
                 if self.is_active(StageActivities.StartingUp) and Stage.close_enough(self.position,
-                                                                                     self.science_position,
-                                                                                     self.POINTING_PRECISION):
+                                                                                     self.science_position):
                     self.end_activity(StageActivities.StartingUp, self.logger)
 
                 for state, tup in self.preset_positions.items():
@@ -336,7 +378,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     activity = tup[1]
                     if not self.is_active(activity):
                         continue
-                    if Stage.close_enough(self.position, target, self.POINTING_PRECISION):
+                    if Stage.close_enough(self.position, target):
                         self.state = state
                         self.end_activity(activity, self.logger)
                         break
@@ -367,13 +409,17 @@ class Stage(Mastapi, Activities, PoweredDevice):
         preset = self.preset_positions[where]
         target_position = preset[0]
         new_activity = preset[1]
-        new_state = preset[2]
-        self.state = new_state
+        self.state = StageState.Moving
         self.start_activity(new_activity, self.logger)
 
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
         self.logger.info(f'move: at {self.position} started moving to {target_position} (state={self.state})')
+
+        if self.simulated:
+            self.target = target_position
+            return
+
         try:
             with self.stage_lock:
                 response = ximclib.command_move(self.device, target_position, 0)
