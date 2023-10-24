@@ -113,7 +113,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
     ticks_at_target: int
     motion_start_time: datetime
     timer: RepeatTimer
-    device_uri: str
+    device_uri: str = None
     _position: int | None = None
     is_moving: bool = False
     preset_positions: dict
@@ -132,9 +132,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
         self.device = None
         self.state = StageState.Unknown
 
-        self.timer = RepeatTimer(2, function=self.ontimer)
-        self.timer.name = 'stage-timer-thread'
-        self.timer.start()
+
         self.activities = StageActivities.Idle
 
         # This is device search and enumeration with probing. It gives more information about devices.
@@ -186,15 +184,25 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     )
                 ximclib.close_device(byref(cast(dev, POINTER(c_int))))
 
-        self.stage_lock = threading.Lock()
-        self.logger.info(f'initialized ({device_info})')
+                self.stage_lock = threading.Lock()
+                self.timer = RepeatTimer(2, function=self.ontimer)
+                self.timer.name = 'stage-timer-thread'
+                self.timer.start()
+
+            self.logger.info(f'initialized ({device_info})')
+
+    def exists(self):
+        return self.device_uri is not None
 
     @property
     def connected(self) -> bool:
-        return self.device is not None
+        return self.exists is not None and self.device is not None
 
     @connected.setter
     def connected(self, value):
+        if not self.exists():
+            return
+
         if not self.is_powered:
             return
 
@@ -218,6 +226,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if not self.exists():
+            return
+
         if self.is_powered:
             self.connected = True
 
@@ -228,6 +239,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if not self.exists():
+            return
+
         if self.is_powered:
             self.connected = False
 
@@ -241,6 +255,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if not self.exists():
+            return
+
         if not self.is_powered:
             self.power_on()
         if not self.connected:
@@ -256,6 +273,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
+        if not self.exists():
+            return
+
         if not self.is_powered:
             return
 
@@ -267,10 +287,16 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
     @property
     def position(self) -> int | None:
+        if not self.exists():
+            return None
+
         return self._position
 
     @position.setter
     def position(self, value):
+        if not self.exists():
+            return
+
         if self.connected:
             with self.stage_lock:
                 result = ximclib.command_move(self.device, value)
@@ -286,6 +312,12 @@ class Stage(Mastapi, Activities, PoweredDevice):
         st.reasons = list()
         st.is_operational = False
         st.is_connected = False
+        if not self.exists():
+            st.reasons.append("no-device-detected")
+            st.is_powered = False
+            st.timestamp()
+            return st
+
         st.is_powered = self.is_powered
         if st.is_powered:
             st.is_connected = self.connected
