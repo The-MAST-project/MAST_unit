@@ -113,7 +113,7 @@ class Unit(Activities):
     _is_autofocusing = False
     id = None
     activities: UnitActivities = UnitActivities.Idle
-    shm: SharedMemory
+    shm: SharedMemory | None
 
     reasons: list = []   # list of reasons for the last failure
     mount: mount
@@ -663,8 +663,10 @@ class Unit(Activities):
             except psutil.NoSuchProcess:
                 pass
 
-        self.shm.close()
-        self.shm.unlink()
+        if self.shm:
+            self.shm.close()
+            self.shm.unlink()
+            self.shm = None
 
         self.camera.ascom.Connected = False
         self.mount.ascom.Connected = False
