@@ -538,7 +538,8 @@ class Unit(Activities):
         """
         return UnitStatus(self)
 
-    def quit(self):
+    @staticmethod
+    def quit():
         """
         Quits the application
 
