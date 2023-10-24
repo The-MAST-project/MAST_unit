@@ -163,9 +163,6 @@ class Unit(Activities):
         self.covers.startup()
         self.focuser.startup()
 
-        if not self.stage.connected:
-            self.stage.connect()
-
     @return_with_status
     def startup(self):
         """
@@ -536,7 +533,8 @@ class Unit(Activities):
         """
         return UnitStatus(self)
 
-    def quit(self):
+    @staticmethod
+    def quit():
         """
         Quits the application
 
