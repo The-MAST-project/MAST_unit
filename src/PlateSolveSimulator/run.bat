@@ -1,1 +1,1 @@
-..\venv\Scripts\python PSSimulator.py
+..\..\venv\Scripts\python PSSimulator.py
