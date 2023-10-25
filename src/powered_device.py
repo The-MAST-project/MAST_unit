@@ -76,7 +76,7 @@ class PowerStatus(TimeStamped):
             if socket.state != PowerState.On:
                 self.is_operational = False
                 self.reasons.append(f'socket[{socket.id.name}] is OFF')
-        self.timestamp()
+        self.stamp()
 
 
 class PoweredDevice:

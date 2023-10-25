@@ -45,7 +45,7 @@ class FocuserStatus(TimeStamped):
 
         self.activities = f.activities
         self.activities_verbal = self.activities.name
-        self.timestamp()
+        self.stamp()
 
 
 class Focuser(Mastapi, Activities, PoweredDevice):

@@ -215,7 +215,7 @@ class HelpResponse:
 class TimeStamped:
     timestamp: datetime
 
-    def timestamp(self):
+    def stamp(self):
         self.timestamp = datetime.datetime.now()
 
 

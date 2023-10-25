@@ -66,7 +66,7 @@ class CameraStatus(TimeStamped):
             self.reasons.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
-        self.timestamp()
+        self.stamp()
 
 
 class Camera(Mastapi, Activities, PoweredDevice):

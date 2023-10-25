@@ -62,7 +62,7 @@ class MountStatus(TimeStamped):
             self.reasons.append('not-powered')
             self.reasons.append('not-connected')
 
-        self.timestamp()
+        self.stamp()
 
 
 class Mount(Mastapi, Activities, PoweredDevice):
