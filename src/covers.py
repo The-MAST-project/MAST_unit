@@ -47,6 +47,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
     ascom = None
     timer: RepeatTimer
     activities: CoverActivities = CoverActivities.Idle
+    _connected: bool
 
     def __init__(self, driver: str):
         self.logger = logging.getLogger('mast.unit.covers')
@@ -63,6 +64,8 @@ class Covers(Mastapi, Activities, PoweredDevice):
         self.timer = RepeatTimer(2, self.ontimer)
         self.timer.name = 'covers-timer-thread'
         self.timer.start()
+
+        self._connected = False
 
         self.logger.info('initialized')
 
@@ -83,16 +86,18 @@ class Covers(Mastapi, Activities, PoweredDevice):
 
     @property
     def connected(self):
-        if self.ascom:
-            return self.ascom.Connected
-        else:
-            return False
+        # if self.ascom:
+        #     return self.ascom.Connected
+        # else:
+        #     return False
+        return self._connected # TODO: remove me
 
     @connected.setter
     def connected(self, value):
         self.logger.info(f"connected = {value}")
         try:
             self.ascom.Connected = value
+            self._connected = value     # TODO: remove me
         except Exception as ex:
             if (hasattr(ex, "excepinfo") and ex.excepinfo[1] == "PWShutter_ASCOM" and
                     ex.excepinfo[2] == "Unable to connect to PWShutter: got error code 255"):
@@ -131,7 +136,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
             st.is_operational = False
             st.reasons.append('not-powered')
             st.reasons.append('not-connected')
-        st.timestamp()
+        st.stamp()
         return st
 
     @return_with_status
