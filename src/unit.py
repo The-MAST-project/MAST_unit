@@ -46,6 +46,11 @@ class SolverResponse:
     ra: float
     dec: float
 
+class AutofocusResult(TimeStamped):
+    success: bool
+    best_position: float
+    tolerance: float
+
 
 class UnitActivities(Flag):
     Idle = 0
@@ -65,6 +70,7 @@ class UnitStatus(TimeStamped):
     focuser: focuser.FocuserStatus
     reasons: dict
     activities: UnitActivities
+    autofocus: AutofocusResult | None
 
     def __init__(self, unit: UnitType):
         self.power = PoweredDevice.status()
@@ -100,7 +106,15 @@ class UnitStatus(TimeStamped):
                 self.reasons['covers'] = self.covers.reasons
             if self.focuser and self.focuser.reasons:
                 self.reasons['focuser'] = self.focuser.reasons
-        self.timestamp()
+
+        if unit.autofocus_result:
+            self.autofocus = AutofocusResult()
+            self.autofocus.success = unit.autofocus_result.success
+            self.autofocus.best_position = unit.autofocus_result.best_position
+            self.autofocus.tolerance = unit.autofocus_result.tolerance
+            self.autofocus.stamp = unit.autofocus_result.stamp
+
+        self.stamp()
 
 
 class Unit(Activities):
@@ -121,6 +135,7 @@ class Unit(Activities):
     stage: stage
     focuser: focuser
     pw: pwi4_client.PWI4
+    autofocus_result: AutofocusResult
 
     timer: RepeatTimer
     plate_solver_process: psutil.Process | subprocess.Popen
@@ -153,6 +168,9 @@ class Unit(Activities):
         self.timer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'unit-timer-thread'
         self.timer.start()
+
+        self.shm = None
+        self.autofocus_result = None
         self.logger.info('initialized')
 
     def do_startup(self):
@@ -246,15 +264,19 @@ class Unit(Activities):
         :mastapi:
         """
         if not self.connected:
-            self.logger.error('Cannot start autofocusing - not-connected')
+            self.logger.error('Cannot start PlaneWave autofocus - not-connected')
             return
 
         if self.pw.status().autofocus.is_running:
             self.logger.info("autofocus already running")
             return
 
-        self.start_activity(UnitActivities.Autofocusing, self.logger)
         self.pw.request("/autofocus/start")
+        while not self.pw.status().autofocus.is_running:        # wait for it to actually start
+            self.logger.debug('waiting for PlaneWave autofocus to start')
+            time.sleep(1)
+        self.start_activity(UnitActivities.Autofocusing, self.logger)
+        self.logger.debug('PlaneWave autofocus has started')
 
     @return_with_status
     def stop_autofocus(self):
@@ -264,11 +286,11 @@ class Unit(Activities):
         :mastapi:
         """
         if not self.connected:
-            self.logger.error('Cannot stop autofocusing - not-connected')
+            self.logger.error('Cannot stop PlaneWave autofocus - not-connected')
             return
 
         if not self.pw.status().autofocus.is_running:
-            self.logger.info("Cannot stop autofocusing, it is not running")
+            self.logger.info("Cannot stop PlaneWave autofocus, it is not running")
             return
         self.pw.request("/autofocus/stop")
         self.end_activity(UnitActivities.Autofocusing, self.logger)
@@ -284,27 +306,44 @@ class Unit(Activities):
         return self.pw.status().autofocus.is_running
 
     def end_guiding(self):
-        self.plate_solver_process.kill()
+        try:
+            self.plate_solver_process.kill()
+        except psutil.NoSuchProcess:
+            pass
+
         self.sock_to_solver.shutdown(socket.SHUT_RDWR)
         self.logger.info(f'guiding ended')
 
     def do_guide(self):
+
+        if not self.shm:
+            try:
+                self.shm = SharedMemory(name=GUIDING_SHM_NAME)
+            except FileNotFoundError:
+                self.shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=self.camera.NumX*self.camera.NumY*4)
 
         proc = utils.find_process(patt='PSSimulator')
         if proc:
             proc.kill()
             self.logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
 
-        sim_dir = 'src/PlateSolveSimulator'
-        subprocess.Popen(os.path.join(sim_dir, 'run.bat'), cwd=sim_dir, shell=True)
-        while True:
+        sim_dir = os.path.realpath(os.path.join('src', 'PlateSolveSimulator'))
+        sim_cmd = os.path.join(sim_dir, 'run.bat')
+        self.logger.info(f'starting plate-solver process with: {sim_cmd}')
+        subprocess.Popen(sim_cmd, cwd=sim_dir, shell=True)
+        start = time.time()
+        while time.time() - start <= 20:
             self.plate_solver_process = utils.find_process(patt='PSSimulator')
             if self.plate_solver_process:
                 break
             else:
                 time.sleep(1)
 
-        self.logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
+        if self.plate_solver_process:
+            self.logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
+        else:
+            self.logger.error(f'No solver process after 20 seconds')
+            return
 
         # self.logger.info(f"creating server socket ...")
         server = socket.create_server(guiding.guider_address_port, family=socket.AF_INET)
@@ -337,14 +376,9 @@ class Unit(Activities):
                 return
 
             image = self.camera.image
-            if not self.shm:
-                try:
-                    self.shm = SharedMemory(name=GUIDING_SHM_NAME)
-                except FileNotFoundError:
-                    self.shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=image.nbytes)
 
             self.logger.info(f'guiding exposure done, getting the image from the camera')
-            shared_image = np.ndarray(image.shape, dtype=image.dtype, buffer=self.shm.buf)
+            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=int, buffer=self.shm.buf)
             shared_image[:] = image[:]
             self.logger.info(f'copied image to shared memory')
 
@@ -652,6 +686,21 @@ class Unit(Activities):
                     self.covers.is_active(covers.CoverActivities.ShuttingDown) or
                     self.mount.is_active(mount.MountActivity.ShuttingDown)):
                 self.end_activity(UnitActivities.ShuttingDown, self.logger)
+
+        if self.is_active(UnitActivities.Autofocusing):
+            autofocus_status = self.pw.status().autofocus
+            if not autofocus_status:
+                self.logger.error('Empty PlaneWave autofocus status')
+            elif not autofocus_status.is_running:   # it's done
+                    self.logger.info('PlaneWave autofocus ended, getting status.')
+                    self.autofocus_result.success = autofocus_status.success
+                    self.autofocus_result.best_position = autofocus_status.best_position
+                    self.autofocus_result.tolerance = autofocus_status.tolerance
+                    self.autofocus_result.stamp()
+
+                    self.end_activity(UnitActivities.Autofocusing, self.logger)
+            else:
+                self.logger.info('PlaneWave autofocus in progress')
 
     def end_lifespan(self):
         self.logger.info('unit end lifespan')
