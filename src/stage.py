@@ -3,7 +3,6 @@ import threading
 from enum import Enum, Flag
 import datetime
 from utils import RepeatTimer, return_with_status, Activities, init_log, TimeStamped
-from typing import TypeAlias
 from mastapi import Mastapi
 from powered_device import PoweredDevice
 import os
@@ -11,12 +10,9 @@ import sys
 import platform
 import configparser
 
-StageStateType: TypeAlias = "StageState"
-
-cur_dir = os.path.abspath(os.path.dirname(__file__))  # Specifies the current directory.
-ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")  # dependencies for examples are in ximc directory.
-ximc_package_dir = os.path.join(ximc_dir, "crossplatform", "wrappers", "python")
-sys.path.append(ximc_package_dir)  # add pyximc.py wrapper to python path
+cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
+ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
+sys.path.append(os.path.join(ximc_dir, "crossplatform", "wrappers", "python"))  # add pyximc.py wrapper to python path
 
 if platform.system() == "Windows":
     # Determining the directory with dependencies for windows depending on the bit depth.
@@ -27,8 +23,8 @@ if platform.system() == "Windows":
     else:
         os.environ["Path"] = lib_dir + ";" + os.environ["Path"]  # add dll path into an environment variable
 
-    from pyximc import (Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER, c_int,
-                        status_t, edges_settings_t)
+    from pyximc import (Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER,
+                        c_int, status_t, edges_settings_t)
     from pyximc import lib as ximclib
 
 
@@ -36,12 +32,7 @@ class StageActivities(Flag):
     Idle = 0
     StartingUp = (1 << 0)
     ShuttingDown = (1 << 1)
-    MovingToScience = (1 << 2)
-    MovingToSky = (1 << 3)
-    MovingToMin = (1 << 4)
-    MovingToMid = (1 << 5)
-    MovingToMax = (1 << 6)
-    MovingToTarget = (1 << 7)
+    Moving = (1 << 2)
 
 
 class StageDirection(Enum):
@@ -54,7 +45,6 @@ class StageStatus(TimeStamped):
     is_connected: bool
     is_operational: bool
     position: int
-    state: StageStateType
     state_verbal: str
     activities: StageActivities
     activities_verbal: str
@@ -62,38 +52,20 @@ class StageStatus(TimeStamped):
     reasons: list[str]
 
 
-class StageState(Enum):
-    Unknown = 0
-    Idle = 1
-    AtScience = 2
-    AtSky = 3
-    AtMin = 4
-    AtMid = 5
-    AtMax = 6
-    MovingToScience = 7
-    MovingToSky = 8
-    MovingToMin = 9
-    MovingToMid = 10
-    MovingToMax = 11
-    MovingToTarget = 12
-    Error = 13
+class PresetPosition(Enum):
+    Image = 1,
+    Spectra = 2,
+    Min = 3,
+    Middle = 4,
+    Max = 5,
 
 
-stage_state_str2int_dict: dict = {
-    'Unknown': StageState.Unknown,
-    'Idle': StageState.Idle,
-    'AtScience': StageState.AtScience,
-    'AtSky': StageState.AtSky,
-    'AtMin': StageState.AtMin,
-    'AtMid': StageState.AtMid,
-    'AtMax': StageState.AtMax,
-    'MovingToScience': StageState.MovingToScience,
-    'MovingToSky': StageState.MovingToSky,
-    'MovingToMin': StageState.MovingToMin,
-    'MovingToMid': StageState.MovingToMid,
-    'MovingToMax': StageState.MovingToMax,
-    'MovingToTarget': StageState.MovingToTarget,
-    'Error': StageState.Error,
+stage_position_str2int_dict: dict = {
+    'Min': PresetPosition.Min,
+    'Max': PresetPosition.Max,
+    'Middle': PresetPosition.Middle,
+    'Image': PresetPosition.Image,
+    'Spectra': PresetPosition.Spectra,
 }
 
 stage_direction_str2int_dict: dict = {
@@ -103,12 +75,7 @@ stage_direction_str2int_dict: dict = {
 
 
 class Stage(Mastapi, Activities, PoweredDevice):
-
-    POINTING_PRECISION = 10     # If within this distance of target and not moving, we arrived
-
     logger: logging.Logger
-    state: StageState
-    default_initial_state: StageState
     ticks_at_start: int
     ticks_at_target: int
     motion_start_time: datetime
@@ -116,12 +83,20 @@ class Stage(Mastapi, Activities, PoweredDevice):
     device_uri: str = None
     _position: int | None = None
     is_moving: bool = False
-    preset_positions: dict
     target: int | None = None
     stage_lock: threading.Lock
-    science_position: int
-    sky_position: int
     activities: StageActivities = StageActivities.Idle
+    presets: dict
+    _positioning_precision = 100
+
+    simulated: False
+    sim_connected: False
+    sim_delta_per_tick = 3000
+
+    @classmethod
+    @property
+    def positioning_precision(cls):
+        return cls._positioning_precision
 
     def __init__(self):
         self.logger = logging.getLogger('mast.unit.stage')
@@ -130,9 +105,6 @@ class Stage(Mastapi, Activities, PoweredDevice):
         PoweredDevice.__init__(self, 'Stage', self)
 
         self.device = None
-        self.state = StageState.Unknown
-
-
         self.activities = StageActivities.Idle
 
         # This is device search and enumeration with probing. It gives more information about devices.
@@ -141,7 +113,6 @@ class Stage(Mastapi, Activities, PoweredDevice):
         dev_enum = ximclib.enumerate_devices(probe_flags, enum_hints)
 
         dev_count = ximclib.get_device_count(dev_enum)
-        device_info = "No device"
         if dev_count > 0:
             self.device_uri = ximclib.get_device_name(dev_enum, 0)
             dev = ximclib.open_device(self.device_uri)
@@ -156,23 +127,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
                     self.min_travel = x_edges_settings.LeftBorder + 100
                     self.max_travel = x_edges_settings.RightBorder - 100
 
-                    config = configparser.ConfigParser()
-                    config.read_file(open('MAST-Settings.ini'))
-                    self.science_position = config.getint('stage', 'SciencePosition', fallback=100000)
-                    self.sky_position = config.getint('stage', 'SkyPosition', fallback=10000)
-
-                    self.preset_positions = {
-                        StageState.AtScience:   (self.science_position, StageActivities.MovingToScience,
-                                                 StageState.MovingToScience),
-                        StageState.AtSky:       (self.sky_position, StageActivities.MovingToSky,
-                                                 StageState.MovingToSky),
-                        StageState.AtMin:       (self.min_travel, StageActivities.MovingToMin, StageState.MovingToMin),
-                        StageState.AtMax:       (self.max_travel, StageActivities.MovingToMax, StageState.MovingToMax),
-                        StageState.AtMid:       (int((self.max_travel - self.min_travel) / 2),
-                                                 StageActivities.MovingToMid, StageState.MovingToMid),
-                    }
-
-                    device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
+                    self.device_info = "Port: {}, Manufacturer={}, Product={}, Version={}.{}.{}, Range={}..{}".format(
                         comport,
                         repr(string_at(x_device_information.Manufacturer).decode()),
                         repr(string_at(x_device_information.ProductDescription).decode()),
@@ -183,24 +138,49 @@ class Stage(Mastapi, Activities, PoweredDevice):
                         self.max_travel,
                     )
                 ximclib.close_device(byref(cast(dev, POINTER(c_int))))
-
                 self.stage_lock = threading.Lock()
-                self.timer = RepeatTimer(2, function=self.ontimer)
-                self.timer.name = 'stage-timer-thread'
-                self.timer.start()
+                self.simulated = False
+        else:
+            self.simulated = True
+            self.max_travel = 300000 - 100
+            self.min_travel = 100
+            self.sim_connected = False
+            sim_delta_per_tick = 3000
+            self.device_info = "Simulated, Range={}..{}".format(
+                    self.min_travel,
+                    self.max_travel,
+                )
 
-            self.logger.info(f'initialized ({device_info})')
+        config = configparser.ConfigParser()
+        config.read_file(open('src/MAST-Settings.ini'))
+        self.presets = {
+            PresetPosition.Min: self.min_travel,
+            PresetPosition.Max: self.max_travel,
+            PresetPosition.Middle: int((self.max_travel - self.min_travel) / 2),
+            PresetPosition.Image: config.getint('stage', 'ImagePosition', fallback=100000),
+            PresetPosition.Spectra: config.getint('stage', 'SpectraPosition', fallback=100000),
+        }
 
-    def exists(self):
-        return self.device_uri is not None
+        if self.simulated:
+            self._position = self.presets[PresetPosition.Spectra]
+
+        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.timer.name = 'stage-timer-thread'
+        self.timer.start()
+
+        self.logger.info(f'initialized ({self.device_info})')
 
     @property
     def connected(self) -> bool:
-        return self.exists is not None and self.device is not None
+        if self.simulated:
+            return self.sim_connected
+        else:
+            return self.device is not None
 
     @connected.setter
     def connected(self, value):
-        if not self.exists():
+        if self.simulated:
+            self.sim_connected = value
             return
 
         if not self.is_powered:
@@ -210,7 +190,6 @@ class Stage(Mastapi, Activities, PoweredDevice):
             dev = ximclib.open_device(self.device_uri)
             if dev != -1:
                 self.device = dev
-                self.state = StageState.Unknown
             else:
                 self.device = None
         else:
@@ -226,8 +205,6 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.exists():
-            return
 
         if self.is_powered:
             self.connected = True
@@ -239,8 +216,6 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.exists():
-            return
 
         if self.is_powered:
             self.connected = False
@@ -255,16 +230,14 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.exists():
-            return
 
         if not self.is_powered:
             self.power_on()
         if not self.connected:
             self.connect()
-        if self.state is not StageState.AtScience:
+        if not Stage.close_enough(self.position, self.presets[PresetPosition.Spectra]):
             self.start_activity(StageActivities.StartingUp, self.logger)
-            self.move(StageState.AtScience)
+            self.move(PresetPosition.Spectra)
 
     @return_with_status
     def shutdown(self):
@@ -273,34 +246,33 @@ class Stage(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.exists():
-            return
-
-        if not self.is_powered:
-            return
-
-        if not self.state == StageState.AtSky:
-            self.start_activity(StageActivities.ShuttingDown, self.logger)
-            self.move(StageState.AtSky)
         self.disconnect()
         self.power_off()
 
     @property
     def position(self) -> int | None:
-        if not self.exists():
-            return None
 
         return self._position
 
     @position.setter
     def position(self, value):
-        if not self.exists():
+        if not self.connected:
+            raise Exception('Not connected')
+
+        if Stage.close_enough(self.position, value):
+            self.logger.info(f'Not changing position ({self.position} is close enough to {value}')
             return
 
-        if self.connected:
+        self.target = value
+        if self.simulated:
+            self.start_activity(StageActivities.Moving, self.logger)
+            return
+        else:
             with self.stage_lock:
                 result = ximclib.command_move(self.device, value)
-            if result != Result.Ok:
+            if result == Result.Ok:
+                self.start_activity(StageActivities.Moving, self.logger)
+            else:
                 raise Exception(f'Could not start move to {value}')
 
     def status(self) -> StageStatus:
@@ -309,74 +281,64 @@ class Stage(Mastapi, Activities, PoweredDevice):
         :mastapi:
         """
         st = StageStatus()
-        st.reasons = list()
-        st.is_operational = False
         st.is_connected = False
-        if not self.exists():
-            st.reasons.append("no-device-detected")
-            st.is_powered = False
-            st.timestamp()
-            return st
-
+        st.activities = self.activities
+        st.activities_verbal = self.activities.name
         st.is_powered = self.is_powered
-        if st.is_powered:
-            st.is_connected = self.connected
-            if st.is_connected:
-                st.state = self.state
-                st.is_operational = st.state == StageState.AtScience
-                if not st.is_operational:
-                    st.reasons.append(f'state is {st.state} instead of {StageState.AtScience}')
-                st.state_verbal = st.state.name
-                st.position = self.position
-                st.activities = self.activities
-                st.activities_verbal = st.activities.name
-            else:
-                st.reasons.append('not-connected')
-        else:
+        st.is_connected = self.connected
+
+        st.reasons = list()
+        if not self.is_powered:
             st.reasons.append('not-powered')
+        if not self.connected:
             st.reasons.append('not-connected')
-        st.timestamp()
+        if self.is_active(StageActivities.Moving):
+            st.reasons.append('moving')
+        if self.connected and not Stage.close_enough(self.position, self.presets[PresetPosition.Spectra]):
+            st.reasons.append('not close enough to the Spectra position ' 
+                              f'(current: {self.position}, Spectra: {self.presets[PresetPosition.Spectra]})')
+        st.is_operational = len(st.reasons) == 0
+
+        st.position = self.position if self.connected else None
+        st.stamp()
         return st
 
     @staticmethod
-    def close_enough(position, target, epsilon):
-        return abs(position - target) <= epsilon
+    def close_enough(position, target):
+        return abs(position - target) <= Stage.positioning_precision
 
     def ontimer(self):
         if not self.connected:
             return
 
-        status = status_t()
-        with self.stage_lock:
-            result = ximclib.get_status(self.device, byref(status))
-        if result == Result.Ok:
-            self._position = status.CurPosition
-            self.is_moving = status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
+        if self.simulated:
+            if self.is_active(StageActivities.Moving):
+                if Stage.close_enough(self.position, self.target):
+                    self.is_moving = False
+                else:
+                    delta = min(abs(self.target - self.position), self.sim_delta_per_tick)
+                    if self.target < self.position:
+                        delta = -delta
+                    self._position += delta
+                    self.logger.debug(f'ontimer: position: {self.position}')
+        else:
+            hw_status = status_t()
+            with self.stage_lock:
+                result = ximclib.get_status(self.device, byref(hw_status))
+            if result == Result.Ok:
+                self._position = hw_status.CurPosition
+                self.is_moving = hw_status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
-            if not self.is_moving:
-                if self.is_active(StageActivities.MovingToTarget) and Stage.close_enough(self.position, self.target,
-                                                                                         self.POINTING_PRECISION):
-                    self.end_activity(StageActivities.MovingToTarget, self.logger)
+        if not self.is_moving:
+            if self.is_active(StageActivities.Moving) and Stage.close_enough(self.position, self.target):
+                self.end_activity(StageActivities.Moving, self.logger)
 
-                if self.is_active(StageActivities.StartingUp) and Stage.close_enough(self.position,
-                                                                                     self.science_position,
-                                                                                     self.POINTING_PRECISION):
-                    self.end_activity(StageActivities.StartingUp, self.logger)
-
-                for state, tup in self.preset_positions.items():
-                    target = tup[0]
-                    activity = tup[1]
-                    if not self.is_active(activity):
-                        continue
-                    if Stage.close_enough(self.position, target, self.POINTING_PRECISION):
-                        self.state = state
-                        self.end_activity(activity, self.logger)
-                        break
-
-                # self.state = StageState.Idle
+            if (self.is_active(StageActivities.StartingUp) and
+                    Stage.close_enough(self.position, self.presets[PresetPosition.Spectra])):
+                self.end_activity(StageActivities.StartingUp, self.logger)
 
     @return_with_status
-    def move(self, where: StageState | str):
+    def move(self, where: PresetPosition | str):
         """
         Starts moving the stage to one of the preset positions
 
@@ -391,29 +353,32 @@ class Stage(Mastapi, Activities, PoweredDevice):
             return
 
         if isinstance(where, str):
-            where = StageState(stage_state_str2int_dict[where])
-        if self.state == where:
-            self.logger.info(f'move: already {where}')
+            if where not in [pre.name for pre in PresetPosition]:
+                self.logger.warning(f"No such preset position '{where}'")
+                return
+        preset_position = self.presets[stage_position_str2int_dict[where]]
+        if Stage.close_enough(self.position, preset_position):
+            self.logger.info(f'Not moving (current position:{self.position}) close enough to {preset_position})')
             return
 
-        preset = self.preset_positions[where]
-        target_position = preset[0]
-        new_activity = preset[1]
-        new_state = preset[2]
-        self.state = new_state
-        self.start_activity(new_activity, self.logger)
+        self.target = preset_position
+        self.start_activity(StageActivities.Moving, self.logger)
 
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
-        self.logger.info(f'move: at {self.position} started moving to {target_position} (state={self.state})')
-        try:
-            with self.stage_lock:
-                response = ximclib.command_move(self.device, target_position, 0)
-            if response != Result.Ok:
-                self.logger.error(f'Failed to start stage move (command_move({self.device}, {target_position}, 0)')
-                return
-        except Exception as ex:
-            self.logger.exception(f'Failed to start stage move (command_move({self.device}, {target_position}, 0)', ex)
+        self.logger.info(f'move: at {self.position} started moving to {self.target}')
+
+        if not self.simulated:
+            try:
+                with self.stage_lock:
+                    response = ximclib.command_move(self.device, self.target, 0)
+                if response != Result.Ok:
+                    self.logger.error(f'Failed to start stage move (command_move({self.device}, {self.target}, 0)')
+                    self.target = None
+                    return
+            except Exception as ex:
+                self.logger.exception(f'Failed to start stage move (command_move({self.device}, {self.target}, 0)', ex)
+                self.target = None
 
     @return_with_status
     def move_microns(self, direction: StageDirection | str, amount: int | str):
@@ -428,6 +393,10 @@ class Stage(Mastapi, Activities, PoweredDevice):
             How many microns to move
         :mastapi:
         """
+        if self.simulated:
+            self.logger.info('Simulated: not moving in microns')
+            return
+
         if isinstance(direction, str):
             direction = StageDirection(stage_direction_str2int_dict[direction])
         if isinstance(amount, str):
@@ -436,8 +405,7 @@ class Stage(Mastapi, Activities, PoweredDevice):
         amount *= 1 if direction == StageDirection.Up else -1
         try:
             self.target = self.position + amount
-            self.state = StageState.MovingToTarget
-            self.start_activity(StageActivities.MovingToTarget, self.logger)
+            self.start_activity(StageActivities.Moving, self.logger)
             with self.stage_lock:
                 response = ximclib.command_movr(self.device, amount, 0)
             if response != Result.Ok:
@@ -455,9 +423,9 @@ class Stage(Mastapi, Activities, PoweredDevice):
         -------
 
         """
-        for activity in (StageActivities.StartingUp, StageActivities.MovingToMax, StageActivities.MovingToMid,
-                         StageActivities.MovingToMin, StageActivities.MovingToScience, StageActivities.MovingToSky,
-                         StageActivities.MovingToTarget):
+        for activity in (StageActivities.StartingUp, StageActivities.Moving, StageActivities.ShuttingDown):
             if self.is_active(activity):
                 self.end_activity(activity, self.logger)
-        ximclib.command_stop(self.device)
+
+        if not self.simulated:
+            ximclib.command_stop(self.device)
