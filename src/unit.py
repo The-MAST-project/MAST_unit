@@ -46,6 +46,7 @@ class SolverResponse:
     ra: float
     dec: float
 
+
 class AutofocusResult(TimeStamped):
     success: bool
     best_position: float
