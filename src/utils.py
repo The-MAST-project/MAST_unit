@@ -151,7 +151,8 @@ def init_log(logger: logging.Logger):
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    handler = DailyFileHandler(path='app.log', mode='a')
+    path_maker = SingletonFactory.get_instance(PathMaker)
+    handler = DailyFileHandler(path=os.path.join(path_maker.make_daily_folder_name(), 'log.txt'), mode='a')
     handler.setLevel(default_log_level)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -516,7 +517,7 @@ class PathMaker:
     def make_exposure_file_name(self):
         exposures_folder = os.path.join(self.make_daily_folder_name(), 'Exposures')
         os.makedirs(exposures_folder, exist_ok=True)
-        return os.path.join(exposures_folder, f'exposure-{path_maker.make_seq(exposures_folder)}')
+        return os.path.join(exposures_folder, f'exposure-{path_maker.make_seq(exposures_folder):04d}')
 
     def make_acquisition_folder_name(self):
         acquisitions_folder = os.path.join(self.make_daily_folder_name(), 'Acquisitions')
