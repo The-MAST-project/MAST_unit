@@ -2,13 +2,14 @@ import logging
 import threading
 from enum import Enum, Flag
 import datetime
+
+import utils
 from utils import RepeatTimer, return_with_status, Activities, init_log, TimeStamped
 from mastapi import Mastapi
 from powered_device import PoweredDevice
 import os
 import sys
 import platform
-import configparser
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
 ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
@@ -145,20 +146,21 @@ class Stage(Mastapi, Activities, PoweredDevice):
             self.max_travel = 300000 - 100
             self.min_travel = 100
             self.sim_connected = False
-            sim_delta_per_tick = 3000
+            self.sim_delta_per_tick = 3000
             self.device_info = "Simulated, Range={}..{}".format(
                     self.min_travel,
                     self.max_travel,
                 )
 
-        config = configparser.ConfigParser()
-        config.read_file(open('src/MAST-Settings.ini'))
+        image_position = utils.config.get("stage", "ImagePosition")
+        spectra_position = utils.config.get("stage", "SpectraPosition")
+
         self.presets = {
             PresetPosition.Min: self.min_travel,
             PresetPosition.Max: self.max_travel,
             PresetPosition.Middle: int((self.max_travel - self.min_travel) / 2),
-            PresetPosition.Image: config.getint('stage', 'ImagePosition', fallback=100000),
-            PresetPosition.Spectra: config.getint('stage', 'SpectraPosition', fallback=100000),
+            PresetPosition.Image: image_position,
+            PresetPosition.Spectra: spectra_position,
         }
 
         if self.simulated:
