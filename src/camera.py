@@ -1,9 +1,14 @@
+import datetime
+import socket
+
 import win32com.client
 from typing import TypeAlias
 import logging
 import astropy.units as u
 from enum import Flag, Enum
-from utils import AscomDriverInfo, RepeatTimer, return_with_status
+
+import utils
+from utils import AscomDriverInfo, RepeatTimer, return_with_status, path_maker
 from powered_device import PoweredDevice
 from utils import Activities, init_log, TimeStamped
 from mastapi import Mastapi
@@ -33,12 +38,24 @@ class CameraActivities(Flag):
     ReadingOut = (1 << 5)
 
 
+class CameraExposure:
+    file: str | None
+    seconds: float
+    date: datetime
+
+    def __init__(self):
+        self.file = None
+        self.seconds = 0
+        self.date = None
+
+
 class CameraStatus(TimeStamped):
 
     is_operational: bool
     temperature: float
     cooler_power: float  # percent
     state: CameraState
+    latest_exposure: None
 
     reasons: list[str]
 
@@ -66,6 +83,12 @@ class CameraStatus(TimeStamped):
             self.reasons.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
+        if c.latest_exposure is not None:
+            if self.latest_exposure is None:
+                self.latest_exposure = CameraExposure()
+            self.latest_exposure.file = c.latest_exposure.file
+            self.latest_exposure.seconds = c.latest_exposure.seconds
+            self.latest_exposure.date = c.latest_exposure.date
         self.stamp()
 
 
@@ -89,6 +112,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
     image = None
     last_state: CameraState = None
     activities: CameraActivities = CameraActivities.Idle
+    latest_exposure: None
 
     def __init__(self, driver: str):
         self.logger = logging.getLogger('mast.unit.camera')
@@ -105,6 +129,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
         self.timer.name = 'camera-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
+        self.latest_exposure = None
 
     @property
     def connected(self) -> bool:
@@ -158,9 +183,14 @@ class Camera(Mastapi, Activities, PoweredDevice):
         ----------
         seconds
             Exposure length in seconds
+        path
+            Where to save the file
 
         :mastapi:
         """
+        if self.latest_exposure is None:
+            self.latest_exposure = CameraExposure()
+
         if self.connected:
             self.start_activity(CameraActivities.Exposing, self.logger)
             self.image = None
@@ -168,6 +198,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
             # readout mode, binning, gain?
 
             self.ascom.StartExposure(seconds, True)
+            self.latest_exposure.seconds = seconds
             self.logger.info(f'exposure started (seconds={seconds})')
 
     @return_with_status
@@ -307,7 +338,21 @@ class Camera(Mastapi, Activities, PoweredDevice):
 
         if self.is_active(CameraActivities.Exposing) and self.ascom.ImageReady:
             self.image = self.ascom.ImageArray
-            self.logger.info(f'image acquired (shutter was open for {self.ascom.LastExposureDuration} seconds)')
+            if self.latest_exposure is None:
+                self.latest_exposure = CameraExposure()
+            if not self.latest_exposure.file:
+                self.latest_exposure.file = path_maker.make_exposure_file_name()
+            self.latest_exposure.date = datetime.datetime.now()
+            self.logger.info(f'saving {self.latest_exposure.file} ...')
+            utils.image_to_fits(self.image, self.latest_exposure.file, header={
+                'SIMPLE': 'True',
+                'DATE': datetime.datetime.utcnow().isoformat(),
+                'NAXIS1': self.NumX,
+                'NAXIS2': self.NumY,
+                'EXPOSURE': self.latest_exposure.seconds,
+                'INSTRUME': socket.gethostname(),
+            })
+            self.logger.info(f'image acquired (seconds={self.ascom.LastExposureDuration})')
             self.end_activity(CameraActivities.Exposing, self.logger)
 
         if self.is_active(CameraActivities.CoolingDown):

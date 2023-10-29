@@ -18,6 +18,7 @@ import time
 from multiprocessing import shared_memory
 import tomlkit
 from tomlkit import TOMLDocument
+from astropy.io import fits
 
 default_log_level = logging.DEBUG
 
@@ -492,9 +493,10 @@ class PathMaker:
         pass
 
     @staticmethod
-    def _make_seq(path: str):
+    def make_seq(path: str):
         seq_file = os.path.join(path, '.seq')
 
+        os.makedirs(os.path.dirname(seq_file), exist_ok=True)
         if os.path.exists(seq_file):
             with open(seq_file) as f:
                 seq = int(f.readline())
@@ -507,29 +509,36 @@ class PathMaker:
         return seq
 
     def make_daily_folder_name(self):
-        return os.path.join(self.top_folder, datetime.datetime.now().strftime('YYYY-MM-DD'))
+        dir = os.path.join(self.top_folder, datetime.datetime.now().strftime('%Y-%m-%d'))
+        os.makedirs(dir, exist_ok=True)
+        return dir
 
     def make_exposure_file_name(self):
         exposures_folder = os.path.join(self.make_daily_folder_name(), 'Exposures')
-        return os.path.join(exposures_folder, f'exposure-{PathMaker._make_seq(exposures_folder)}')
+        os.makedirs(exposures_folder, exist_ok=True)
+        return os.path.join(exposures_folder, f'exposure-{path_maker.make_seq(exposures_folder)}')
 
     def make_acquisition_folder_name(self):
         acquisitions_folder = os.path.join(self.make_daily_folder_name(), 'Acquisitions')
-        return os.path.join(acquisitions_folder, f'acquisition-{PathMaker._make_seq(acquisitions_folder)}')
+        os.makedirs(acquisitions_folder, exist_ok=True)
+        return os.path.join(acquisitions_folder, f'acquisition-{PathMaker.make_seq(acquisitions_folder)}')
 
     def make_guiding_folder_name(self):
         guiding_folder = os.path.join(self.make_daily_folder_name(), 'Guidings')
-        return os.path.join(guiding_folder, f'guiding-{PathMaker._make_seq(guiding_folder)}')
+        os.makedirs(guiding_folder, exist_ok=True)
+        return os.path.join(guiding_folder, f'guiding-{PathMaker.make_seq(guiding_folder)}')
 
     def make_logfile_name(self):
-        return os.path.join(self.make_daily_folder_name(), 'log.txt')
+        daily_folder = os.path.join(self.make_daily_folder_name())
+        os.makedirs(daily_folder)
+        return os.path.join(daily_folder, 'log.txt')
 
 
-# A path make singleton
+# A path-maker singleton
 path_maker = SingletonFactory.get_instance(PathMaker)
 
 
-def image_to_fits(image, path: str, params: dict):
+def image_to_fits(image, path: str, header: dict):
     """
 
     Parameters
@@ -538,8 +547,8 @@ def image_to_fits(image, path: str, params: dict):
         an ASCOM ImageArray
     path
         name of the created file
-    params
-        goes into the FITS header
+    header
+        a dictionary of FITS header key/values
 
     Returns
     -------
@@ -549,4 +558,9 @@ def image_to_fits(image, path: str, params: dict):
         raise 'Must supply a path to the file'
     if not path.endswith('.fits'):
         path += '.fits'
-    # TODO: the rest
+
+    hdu = fits.PrimaryHDU(image)
+    for k, v in header.items():
+        hdu.header[k] = v
+    hdul = fits.HDUList([hdu])
+    hdul.writeto(path)
