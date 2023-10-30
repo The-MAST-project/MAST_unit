@@ -2,6 +2,7 @@ import datetime
 import socket
 
 import win32com.client
+import pywintypes
 from typing import TypeAlias
 import logging
 import astropy.units as u
@@ -133,7 +134,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
 
     @property
     def connected(self) -> bool:
-        return self.ascom and self.ascom.Connected
+        return self.ascom and utils.ascom_run(self, 'Connected', no_entry_log=True)
 
     @connected.setter
     def connected(self, value: bool):
@@ -141,12 +142,12 @@ class Camera(Mastapi, Activities, PoweredDevice):
             return
 
         if self.ascom is not None:
-            self.ascom.connected = value
+            utils.ascom_run(self, f'Connected = {value}')
         if value:
-            self.PixelSizeX = self.ascom.PixelSizeX
-            self.PixelSizeY = self.ascom.PixelSizeY
-            self.NumX = self.ascom.NumX
-            self.NumY = self.ascom.NumY
+            self.PixelSizeX = utils.ascom_run(self, 'PixelSizeX')
+            self.PixelSizeY = utils.ascom_run(self, 'PixelSizeY')
+            self.NumX = utils.ascom_run(self, 'NumX')
+            self.NumY = utils.ascom_run(self, 'NumY')
             self.RadX = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
             self.RadY = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         self.logger.info(f'connected = {value}')
@@ -197,7 +198,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
 
             # readout mode, binning, gain?
 
-            self.ascom.StartExposure(seconds, True)
+            utils.ascom_run(self, f'StartExposure({seconds}, True)')
             self.latest_exposure = CameraExposure()
             self.latest_exposure.seconds = seconds
             self.logger.info(f'exposure started (seconds={seconds})')
@@ -212,13 +213,14 @@ class Camera(Mastapi, Activities, PoweredDevice):
         if not self.connected:
             return
 
-        if self.ascom.CanAbortExposure:
+        if utils.ascom_run(self, 'CanAbortExposure'):
             try:
-                self.ascom.AbortExposure()
+                utils.ascom_run(self, 'AbortExposure()')
             except Exception as ex:
                 self.logger .exception(f'failed to stop exposure', ex)
         else:
-            self.logger.info(f'ASCOM camera "{self.ascom.Name}" cannot stop exposure')
+            camera_name = utils.ascom_run(self, 'Name')
+            self.logger.info(f'ASCOM camera "{camera_name}" cannot stop exposure')
         self.end_activity(CameraActivities.Exposing, self.logger)
 
     @return_with_status
@@ -232,7 +234,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
             return
 
         if self.is_active(CameraActivities.Exposing):
-            self.ascom.StopExposure()  # the timer will read the image
+            utils.ascom_run(self, 'StopExposure()')  # the timer will read the image
 
     def status(self) -> CameraStatus:
         """
@@ -259,24 +261,24 @@ class Camera(Mastapi, Activities, PoweredDevice):
         if not self.connected:
             self.connect()
         if self.connected:
-            self.ascom.CoolerOn = True
-            if abs(self.ascom.CCDTemperature - self.operational_set_point) > 0.5:
+            utils.ascom_run(self, 'CoolerOn = True')
+            if abs(utils.ascom_run(self, 'CCDTemperature') - self.operational_set_point) > 0.5:
                 self.cooldown()
 
     @return_with_status
     def cooldown(self):
-        if not self.ascom.Connected:
+        if not utils.ascom_run(self, 'Connected'):
             return
 
         self.start_activity(CameraActivities.CoolingDown, self.logger)
         # Turn on cooler
-        if not self.ascom.CoolerOn:
+        if not utils.ascom_run(self, 'CoolerOn'):
             self.logger.info(f'cool-down: cooler ON')
-            self.ascom.CoolerOn = True
+            utils.ascom_run(self, 'CoolerOn = True')
 
-        if self.ascom.CanSetCCDTemperature:
+        if utils.ascom_run(self, 'CanSetCCDTemperature'):
             self.logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
-            self.ascom.SetCCDTemperature = self.operational_set_point
+            utils.ascom_run(self, f'SetCCDTemperature = {self.operational_set_point}')
 
     @return_with_status
     def shutdown(self):
@@ -287,7 +289,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
         """
         if self.connected:
             self.start_activity(CameraActivities.ShuttingDown, self.logger)
-            if abs(self.ascom.CCDTemperature - self.warm_set_point) > 0.5:
+            if abs(utils.ascom_run(self, 'CCDTemperature') - self.warm_set_point) > 0.5:
                 self.warmup()
 
     @return_with_status
@@ -298,13 +300,13 @@ class Camera(Mastapi, Activities, PoweredDevice):
         if not self.connected:
             return
 
-        if self.ascom.CanSetCCDTemperature:
+        if utils.ascom_run(self, 'CanSetCCDTemperature'):
             self.start_activity(CameraActivities.WarmingUp, self.logger)
-            temp = self.ascom.CCDTemperature
+            temp = utils.ascom_run(self, 'CCDTemperature')
 
             self.logger.info(
                 f'warm-up started: current temp: {temp:.1f}, setting set-point to {self.warm_set_point:.1f}')
-            self.ascom.SetCCDTemperature(self.warm_set_point)
+            utils.ascom_run(self, f'SetCCDTemperature({self.warm_set_point})')
 
     def abort(self):
         """
@@ -314,7 +316,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
 
         """
         if self.is_active(CameraActivities.Exposing):
-            self.ascom.AbortExposure()
+            utils.ascom_run(self, 'AbortExposure()')
             self.end_activity(CameraActivities.Exposing, self.logger)
 
     def ontimer(self):
@@ -325,20 +327,20 @@ class Camera(Mastapi, Activities, PoweredDevice):
             return
 
         if self.last_state is None:
-            self.last_state = self.ascom.CameraState
+            self.last_state = utils.ascom_run(self, 'CameraState', no_entry_log=True)
             self.logger.info(f'state changed from None to {CameraState(self.last_state)}')
         else:
-            state = self.ascom.CameraState
+            state = utils.ascom_run(self, 'CameraState', no_entry_log=True)
             if not state == self.last_state:
                 percent = ''
                 if state == CameraState.Exposing or state == CameraState.Waiting or state == CameraState.Reading or \
                         state == CameraState.Download:
-                    percent = f'{self.ascom.PercentCompleted} %'
+                    percent = f"{utils.ascom_run(self, 'PercentCompleted')} %"
                 self.logger.info(f'state changed from {CameraState(self.last_state)} to {CameraState(state)} {percent}')
                 self.last_state = state
 
-        if self.is_active(CameraActivities.Exposing) and self.ascom.ImageReady:
-            self.image = self.ascom.ImageArray
+        if self.is_active(CameraActivities.Exposing) and utils.ascom_run(self, 'ImageReady'):
+            self.image = utils.ascom_run(self, 'ImageArray', no_entry_log=True)
             if self.latest_exposure is None:
                 self.latest_exposure = CameraExposure()
             if not self.latest_exposure.file:
@@ -352,26 +354,28 @@ class Camera(Mastapi, Activities, PoweredDevice):
                 'EXPOSURE': self.latest_exposure.seconds,
                 'INSTRUME': socket.gethostname(),
             }
-            Thread(name='fits-saver',
+            Thread(name='fits-saver-thread',
                    target=utils.image_to_fits,
-                   args=[self.image,
-                         self.latest_exposure.file,
-                         header,
-                         self.logger]).start()
-            self.logger.info(f'image acquired (seconds={self.ascom.LastExposureDuration})')
+                   args=[
+                    self.image,
+                    self.latest_exposure.file,
+                    header,
+                    self.logger
+                   ]).start()
+            self.logger.info(f"image acquired (seconds={utils.ascom_run(self, 'LastExposureDuration')})")
             self.end_activity(CameraActivities.Exposing, self.logger)
 
         if self.is_active(CameraActivities.CoolingDown):
-            temp = self.ascom.CCDTemperature
+            temp = utils.ascom_run(self, 'CCDTemperature')
             if temp <= self.operational_set_point:
                 self.end_activity(CameraActivities.CoolingDown, self.logger)
                 self.end_activity(CameraActivities.StartingUp, self.logger)
                 self.logger.info(f'cool-down: done (temperature={temp:.1f}, set-point={self.operational_set_point})')
 
         if self.is_active(CameraActivities.WarmingUp):
-            temp = self.ascom.CCDTemperature
+            temp = utils.ascom_run(self, 'CCDTemperature')
             if temp >= self.warm_set_point:
-                self.ascom.CoolerOn = False
+                utils.ascom_run(self, 'CoolerOn = False')
                 self.logger.info('turned cooler OFF')
                 self.end_activity(CameraActivities.WarmingUp, self.logger)
                 self.end_activity(CameraActivities.ShuttingDown, self.logger)

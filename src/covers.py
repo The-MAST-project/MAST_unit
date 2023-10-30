@@ -4,6 +4,8 @@ import win32com.client
 import logging
 from enum import Enum, Flag
 from typing import TypeAlias
+
+import utils
 from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log, TimeStamped
 from powered_device import PoweredDevice
 from mastapi import Mastapi
@@ -96,7 +98,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
     def connected(self, value):
         self.logger.info(f"connected = {value}")
         try:
-            self.ascom.Connected = value
+            utils.ascom_run(self, f'Connected = {value}')
             self._connected = value     # TODO: remove me
         except Exception as ex:
             if (hasattr(ex, "excepinfo") and ex.excepinfo[1] == "PWShutter_ASCOM" and
@@ -104,10 +106,10 @@ class Covers(Mastapi, Activities, PoweredDevice):
                 pass
             else:
                 self.logger.error(f"failed to set connected to '{value}'", exc_info=ex)
-                self.ascom.Connected = value
+                utils.ascom_run(self, f'Connected = {value}')
 
     def state(self) -> CoversState:
-        return CoversState(self.ascom.CoverState)
+        return CoversState(utils.ascom_run(self, 'CoverState'))
 
     def status(self) -> CoversStatus:
         """
@@ -151,7 +153,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
 
         self.logger.info('opening covers')
         self.start_activity(CoverActivities.Opening, self.logger)
-        self.ascom.OpenCover()
+        utils.ascom_run(self, 'OpenCover()')
 
     @return_with_status
     def close(self):
@@ -164,7 +166,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
 
         self.logger.info('closing covers')
         self.start_activity(CoverActivities.Closing, self.logger)
-        self.ascom.CloseCover()
+        utils.ascom_run(self, 'CloseCover()')
 
     @return_with_status
     def startup(self):
@@ -202,7 +204,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
         -------
 
         """
-        self.ascom.HaltCover()
+        utils.ascom_run(self, 'HaltCover()')
         for activity in (CoverActivities.StartingUp, CoverActivities.ShuttingDown,
                          CoverActivities.Closing, CoverActivities.Opening):
             if self.is_active(activity):

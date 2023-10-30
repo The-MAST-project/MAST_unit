@@ -2,6 +2,8 @@ import time
 
 import win32com.client
 import logging
+
+import utils
 from PlaneWave import pwi4_client
 from typing import TypeAlias
 from enum import Flag
@@ -119,7 +121,7 @@ class Mount(Mastapi, Activities, PoweredDevice):
     def connected(self) -> bool:
         st = self.pw.status()
         return (self.ascom and
-                self.ascom.Connected and
+                utils.ascom_run(self, 'Connected', True) and
                 st.mount.is_connected and
                 st.mount.axis0.is_enabled and
                 st.mount.axis1.is_enabled)
@@ -132,8 +134,8 @@ class Mount(Mastapi, Activities, PoweredDevice):
         st = self.pw.status()
         try:
             if value:
-                if not self.ascom.Connected:
-                    self.ascom.Connected = True
+                if not utils.ascom_run(self, 'Connected'):
+                    utils.ascom_run(self, 'Connected = True')
                 if not st.mount.is_connected:
                     self.pw.mount_connect()
                 if not st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
@@ -145,7 +147,7 @@ class Mount(Mastapi, Activities, PoweredDevice):
                     st.pw.mount_disable()
                 st.pw.mount_disconnect()
                 self.pw.request('/fans/off')
-                self.ascom.Connected = False
+                utils.ascom_run(self, 'Connected = False')
                 self.logger.info(f'connected = {value}, axes disabled, disconnected, fans off')
         except Exception as ex:
             self.logger.exception(ex)

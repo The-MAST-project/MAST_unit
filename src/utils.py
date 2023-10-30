@@ -19,6 +19,8 @@ from multiprocessing import shared_memory
 import tomlkit
 from tomlkit import TOMLDocument
 from astropy.io import fits
+import pywintypes
+import re
 
 default_log_level = logging.DEBUG
 
@@ -483,7 +485,7 @@ class Config:
             tomlkit.dump(self.host_config.data, f)
 
 
-config = SingletonFactory.get_instance(Config)
+
 
 
 class PathMaker:
@@ -535,7 +537,8 @@ class PathMaker:
         return os.path.join(daily_folder, 'log.txt')
 
 
-# A path-maker singleton
+# Singletons
+config: Config= SingletonFactory.get_instance(Config)
 path_maker = SingletonFactory.get_instance(PathMaker)
 
 
@@ -568,3 +571,40 @@ def image_to_fits(image, path: str, header: dict, logger):
     hdul = fits.HDUList([hdu])
     logger.info(f'saving image to {path} ...')
     hdul.writeto(path)
+
+
+class AscomDispatcher:
+    ascom: object
+    logger: logging.Logger
+
+    def __init__(self, o: object):
+        self.ascom = o.ascom
+        self.logger = o.logger
+
+
+def ascom_run(o: object, sentence: str, no_entry_log=False):
+    o = AscomDispatcher(o)
+    ascom_dispatcher = f'{o.ascom}'
+    ascom_dispatcher = re.sub('COMObject ', '', ascom_dispatcher)
+    label = f'{ascom_dispatcher}.{sentence}'
+
+    cmd = f"o.ascom.{sentence}"
+    try:
+        ret = None
+        if sentence.__contains__("="):
+            msg = f'(exec) {label}'
+            exec(cmd, globals(), locals())
+        else:
+            msg = f'(eval) {label}'
+            ret = eval(cmd, globals(), locals())
+            msg += f' -> {ret}'
+        if not no_entry_log:
+            o.logger.debug(msg)
+        return ret
+    except pywintypes.com_error as e:
+        o.logger.debug(f'{label} ASCOM error (cmd="{cmd}": {e}')
+        o.logger.debug(f'{label} Description: {e.excepinfo[2]}')
+        o.logger.debug(f'{label}  Error code: {e.hresult}')
+        o.logger.debug(f'{label}     Message: {str(e)}')
+    except Exception as e:
+        o.logger.debug(f'{label} Exception: (cmd="{cmd}") {e}')

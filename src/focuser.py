@@ -2,6 +2,8 @@ import win32com.client
 from typing import TypeAlias
 import logging
 from enum import Flag
+
+import utils
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log, TimeStamped
 from powered_device import PoweredDevice, PowerState
 from PlaneWave import pwi4_client
@@ -123,7 +125,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
             self.pw.focuser_disable()
 
         if self.ascom:
-            self.ascom.Connected = value
+            utils.ascom_run(self, f'Connected = {value}', True)
 
     @property
     def position(self):
