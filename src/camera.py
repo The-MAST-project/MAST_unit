@@ -6,6 +6,7 @@ from typing import TypeAlias
 import logging
 import astropy.units as u
 from enum import Flag, Enum
+from threading import Thread
 
 import utils
 from utils import AscomDriverInfo, RepeatTimer, return_with_status, path_maker
@@ -55,7 +56,7 @@ class CameraStatus(TimeStamped):
     temperature: float
     cooler_power: float  # percent
     state: CameraState
-    latest_exposure: None
+    latest_exposure: None | CameraExposure
 
     reasons: list[str]
 
@@ -83,9 +84,8 @@ class CameraStatus(TimeStamped):
             self.reasons.append('not-connected')
         self.activities = c.activities
         self.activities_verbal = self.activities.name
+        self.latest_exposure = CameraExposure()
         if c.latest_exposure is not None:
-            if self.latest_exposure is None:
-                self.latest_exposure = CameraExposure()
             self.latest_exposure.file = c.latest_exposure.file
             self.latest_exposure.seconds = c.latest_exposure.seconds
             self.latest_exposure.date = c.latest_exposure.date
@@ -112,7 +112,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
     image = None
     last_state: CameraState = None
     activities: CameraActivities = CameraActivities.Idle
-    latest_exposure: None
+    latest_exposure: None | CameraExposure
 
     def __init__(self, driver: str):
         self.logger = logging.getLogger('mast.unit.camera')
@@ -198,6 +198,7 @@ class Camera(Mastapi, Activities, PoweredDevice):
             # readout mode, binning, gain?
 
             self.ascom.StartExposure(seconds, True)
+            self.latest_exposure = CameraExposure()
             self.latest_exposure.seconds = seconds
             self.logger.info(f'exposure started (seconds={seconds})')
 
@@ -343,15 +344,20 @@ class Camera(Mastapi, Activities, PoweredDevice):
             if not self.latest_exposure.file:
                 self.latest_exposure.file = path_maker.make_exposure_file_name()
             self.latest_exposure.date = datetime.datetime.now()
-            self.logger.info(f'saving {self.latest_exposure.file} ...')
-            utils.image_to_fits(self.image, self.latest_exposure.file, header={
+            header = {
                 'SIMPLE': 'True',
                 'DATE': datetime.datetime.utcnow().isoformat(),
-                'NAXIS1': self.NumX,
-                'NAXIS2': self.NumY,
+                'NAXIS1': self.NumY,
+                'NAXIS2': self.NumX,
                 'EXPOSURE': self.latest_exposure.seconds,
                 'INSTRUME': socket.gethostname(),
-            })
+            }
+            Thread(name='fits-saver',
+                   target=utils.image_to_fits,
+                   args=[self.image,
+                         self.latest_exposure.file,
+                         header,
+                         self.logger]).start()
             self.logger.info(f'image acquired (seconds={self.ascom.LastExposureDuration})')
             self.end_activity(CameraActivities.Exposing, self.logger)
 
