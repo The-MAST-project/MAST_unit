@@ -539,7 +539,7 @@ class PathMaker:
 path_maker = SingletonFactory.get_instance(PathMaker)
 
 
-def image_to_fits(image, path: str, header: dict):
+def image_to_fits(image, path: str, header: dict, logger):
     """
 
     Parameters
@@ -550,6 +550,8 @@ def image_to_fits(image, path: str, header: dict):
         name of the created file
     header
         a dictionary of FITS header key/values
+    logger
+        a logger for logging :-)
 
     Returns
     -------
@@ -564,4 +566,5 @@ def image_to_fits(image, path: str, header: dict):
     for k, v in header.items():
         hdu.header[k] = v
     hdul = fits.HDUList([hdu])
+    logger.info(f'saving image to {path} ...')
     hdul.writeto(path)
