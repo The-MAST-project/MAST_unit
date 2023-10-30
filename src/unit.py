@@ -27,6 +27,7 @@ import os
 import subprocess
 from enum import Enum
 import json
+from utils import config
 
 UnitType: TypeAlias = "Unit"
 
@@ -157,9 +158,9 @@ class Unit(Activities):
         self.id = unit_id
         try:
             self.pw = pwi4_client.PWI4()
-            self.camera = camera.Camera('ASCOM.PlaneWaveVirtual.Camera')
-            self.covers = covers.Covers('ASCOM.PlaneWave.CoverCalibrator')
-            self.focuser = focuser.Focuser('ASCOM.PWI4.Focuser')
+            self.camera = camera.Camera(config.get('camera', 'AscomDriver'))
+            self.covers = covers.Covers(config.get('covers', 'AscomDriver'))
+            self.focuser = focuser.Focuser(config.get('focuser', 'AscomDriver'))
             self.mount = mount.Mount()
             self.stage = stage.Stage()
         except Exception as ex:
