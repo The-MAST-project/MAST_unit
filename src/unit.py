@@ -173,7 +173,9 @@ class Unit(Activities):
 
         self.shm = None
         self.autofocus_result = None
+        log_filename = os.path.join(utils.path_maker.make_daily_folder_name(), 'log.txt')
         self.logger.info('initialized')
+        self.logger.info(f'logging to {log_filename}')
 
     def do_startup(self):
         self.start_activity(UnitActivities.StartingUp, self.logger)
