@@ -148,20 +148,16 @@ def init_log(logger: logging.Logger):
     logger.setLevel(default_log_level)
     handler = logging.StreamHandler()
     handler.setLevel(default_log_level)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s}' +
+    formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - {%(name)s:%(funcName)s:%(threadName)s:%(thread)s}' +
                                   ' -  %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    path_maker = SingletonFactory.get_instance(PathMaker)
+    # path_maker = SingletonFactory.get_instance(PathMaker)
     handler = DailyFileHandler(path=os.path.join(path_maker.make_daily_folder_name(), 'log.txt'), mode='a')
     handler.setLevel(default_log_level)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-
-
-def is_mastapi(func):
-    return func.__doc__.contains(':mastapi:')
 
 
 def quote(s: str):
@@ -591,20 +587,21 @@ def ascom_run(o: object, sentence: str, no_entry_log=False):
     cmd = f"o.ascom.{sentence}"
     try:
         ret = None
+        msg = f'{label}'
         if sentence.__contains__("="):
-            msg = f'(exec) {label}'
             exec(cmd, globals(), locals())
         else:
-            msg = f'(eval) {label}'
             ret = eval(cmd, globals(), locals())
             msg += f' -> {ret}'
         if not no_entry_log:
             o.logger.debug(msg)
         return ret
+
     except pywintypes.com_error as e:
         o.logger.debug(f'{label} ASCOM error (cmd="{cmd}": {e}')
         o.logger.debug(f'{label} Description: {e.excepinfo[2]}')
         o.logger.debug(f'{label}  Error code: {e.hresult}')
         o.logger.debug(f'{label}     Message: {str(e)}')
+
     except Exception as e:
         o.logger.debug(f'{label} Exception: (cmd="{cmd}") {e}')
