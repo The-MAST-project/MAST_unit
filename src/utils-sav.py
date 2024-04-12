@@ -466,6 +466,8 @@ class Config:
         -------
 
         """
+        if not section in config.host_config.data:
+            config.host_config.data[section] = tomlkit.table(True)
         self.host_config.data[section][item] = value
         if comment:
             self.host_config.data[section][item].comment(comment)

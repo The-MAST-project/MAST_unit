@@ -1,18 +1,19 @@
 import win32com.client
-from typing import TypeAlias
+from typing import TypeAlias, List
 import logging
-from enum import Flag
+from enum import IntFlag
 
-import utils
-from utils import AscomDriverInfo, RepeatTimer, return_with_status, Activities, init_log, TimeStamped
-from powered_device import PoweredDevice, PowerState
+from common.utils import RepeatTimer, return_with_status, init_log, TimeStamped, Component
+from common.ascom import AscomDriverInfo, ascom_run
+from common.config import Config
 from PlaneWave import pwi4_client
 from mastapi import Mastapi
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 
 FocuserType: TypeAlias = "Focuser"
 
 
-class FocuserActivities(Flag):
+class FocuserActivities(IntFlag):
     Idle = 0
     Moving = (1 << 0)
     StartingUp = (1 << 1)
@@ -29,8 +30,8 @@ class FocuserStatus(TimeStamped):
         stat = f.pw.status()
         self.ascom = AscomDriverInfo(f.ascom)
         self.reasons = list()
-        self.is_powered = f.is_powered
-        if self.is_powered:
+        self.is_on = f.is_on()
+        if self.is_on:
             self.is_connected = f.connected
             if not self.is_connected:
                 self.is_operational = False
@@ -50,7 +51,7 @@ class FocuserStatus(TimeStamped):
         self.stamp()
 
 
-class Focuser(Mastapi, Activities, PoweredDevice):
+class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
     logger: logging.Logger
     pw: pwi4_client
@@ -58,6 +59,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
     timer: RepeatTimer
 
     def __init__(self, driver: str):
+        self.conf = Config().toml['focuser']
         self.logger = logging.getLogger('mast.unit.focuser')
         init_log(self.logger)
         try:
@@ -66,7 +68,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
             self.logger.exception(ex)
             raise ex
 
-        PoweredDevice.__init__(self, 'Focuser', self)
+        SwitchedPowerDevice.__init__(self, self.conf)
 
         self.pw = pwi4_client.PWI4()
         self.timer = RepeatTimer(2, function=self.ontimer)
@@ -79,8 +81,8 @@ class Focuser(Mastapi, Activities, PoweredDevice):
         """
         :mastapi:
         """
-        if not self.is_powered:
-            self.power(PowerState.On)
+        if not self.is_on():
+            self.power_on()
         if not self.connected:
             self.connect()
         self.pw.focuser_enable()
@@ -93,8 +95,8 @@ class Focuser(Mastapi, Activities, PoweredDevice):
         if self.connected:
             self.disconnect()
         self.pw.focuser_disable()
-        if self.is_powered:
-            self.power(PowerState.Off)
+        if self.is_on():
+            self.power_off()
 
     @return_with_status
     def connect(self):
@@ -125,7 +127,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
             self.pw.focuser_disable()
 
         if self.ascom:
-            utils.ascom_run(self, f'Connected = {value}', True)
+            ascom_run(self, f'Connected = {value}', True)
 
     @property
     def position(self):
@@ -147,7 +149,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.is_powered:
+        if not self.is_on():
             self.logger.info('Cannot goto - not-powered')
             return
         if not self.connected:
@@ -156,7 +158,7 @@ class Focuser(Mastapi, Activities, PoweredDevice):
 
         if isinstance(position, str):
             position = int(position)
-        self.start_activity(FocuserActivities.Moving, self.logger)
+        self.start_activity(FocuserActivities.Moving)
         self.pw.focuser_goto(position)
 
     def abort(self):
@@ -170,16 +172,16 @@ class Focuser(Mastapi, Activities, PoweredDevice):
         """
         if self.is_active(FocuserActivities.Moving):
             self.pw.focuser_stop()
-            self.end_activity(FocuserActivities.Moving, self.logger)
+            self.end_activity(FocuserActivities.Moving)
 
         if self.is_active(FocuserActivities.StartingUp):
-            self.end_activity(FocuserActivities.StartingUp, self.logger)
+            self.end_activity(FocuserActivities.StartingUp)
 
     def ontimer(self):
         stat = self.pw.status()
 
         if self.is_active(FocuserActivities.Moving) and not stat.focuser.is_moving:
-            self.end_activity(FocuserActivities.Moving, self.logger)
+            self.end_activity(FocuserActivities.Moving)
 
     def status(self) -> FocuserStatus:
         """
@@ -190,3 +192,18 @@ class Focuser(Mastapi, Activities, PoweredDevice):
 
         """
         return FocuserStatus(self)
+
+    @property
+    def name(self) -> str:
+        return 'focuser'
+
+    @property
+    def operational(self) -> bool:
+        return self.is_on()
+
+    @property
+    def why_not_operational(self) -> List[str]:
+        ret = []
+        if not self.is_on():
+            ret.append(f"{self.name}: not powered")
+        return ret

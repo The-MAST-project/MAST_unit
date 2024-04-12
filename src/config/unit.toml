@@ -1,15 +1,22 @@
 [global]
   TopFolder = "C:\\MAST"
 
+[mount]
+  power = {'switch'=1, 'outlet'=1}
+  network = {'address'='192.168.xxx.yyy'}
+
 [stage]
   SpectraPosition =  100000
   ImagePosition = 10000
+  power = {'switch'=1, 'outlet'=2}
 
 [camera]
   AscomDriver = "ASCOM.PlaneWaveVirtual.Camera"
+  power = {'switch'=1, 'outlet'=3}
 
 [focuser]
   AscomDriver = "ASCOM.PWI4.Focuser"
+  power = {'switch'=1, 'outlet'=4}
 
 [covers]
   AscomDriver = "ASCOM.PlaneWave.CoverCalibrator"
