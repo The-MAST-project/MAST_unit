@@ -3,7 +3,7 @@
 
 [mount]
   power = {'switch'=1, 'outlet'=1}
-  network = {'address'='192.168.xxx.yyy'}
+  network = {'address'='192.168.30.42'}
 
 [stage]
   SpectraPosition =  100000

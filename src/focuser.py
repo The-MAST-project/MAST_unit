@@ -1,77 +1,41 @@
-import win32com.client
-from typing import TypeAlias, List
-import logging
-from enum import IntFlag
+import datetime
 
-from common.utils import RepeatTimer, return_with_status, init_log, TimeStamped, Component
+import win32com.client
+from typing import List
+import logging
+from enum import IntFlag, auto
+
+from common.utils import RepeatTimer, return_with_status, init_log, Component
 from common.ascom import AscomDriverInfo, ascom_run
 from common.config import Config
 from PlaneWave import pwi4_client
 from mastapi import Mastapi
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 
-FocuserType: TypeAlias = "Focuser"
-
 
 class FocuserActivities(IntFlag):
     Idle = 0
-    Moving = (1 << 0)
-    StartingUp = (1 << 1)
-    ShuttingDown = (1 << 2)
-
-
-class FocuserStatus(TimeStamped):
-
-    activities: FocuserActivities = FocuserActivities.Idle
-    is_operational: bool
-    reasons: list[str]
-
-    def __init__(self, f: FocuserType):
-        stat = f.pw.status()
-        self.ascom = AscomDriverInfo(f.ascom)
-        self.reasons = list()
-        self.is_on = f.is_on()
-        if self.is_on:
-            self.is_connected = f.connected
-            if not self.is_connected:
-                self.is_operational = False
-                self.reasons.append('not-connected')
-            else:
-                self.is_operational = True
-                self.is_moving = stat.focuser.is_moving
-                self.position = stat.focuser.position
-        else:
-            self.is_operational = False
-            self.is_connected = False
-            self.reasons.append('not-powered')
-            self.reasons.append('not-connected')
-
-        self.activities = f.activities
-        self.activities_verbal = self.activities.name
-        self.stamp()
+    Moving = auto()
+    StartingUp = auto()
+    ShuttingDown = auto()
 
 
 class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
-    logger: logging.Logger
-    pw: pwi4_client
-    activities: FocuserActivities = FocuserActivities.Idle
-    timer: RepeatTimer
-
-    def __init__(self, driver: str):
+    def __init__(self):
         self.conf = Config().toml['focuser']
-        self.logger = logging.getLogger('mast.unit.focuser')
+        self.logger: logging.Logger = logging.getLogger('mast.unit.focuser')
         init_log(self.logger)
         try:
-            self.ascom = win32com.client.Dispatch(driver)
+            self.ascom = win32com.client.Dispatch(self.conf['AscomDriver'])
         except Exception as ex:
             self.logger.exception(ex)
             raise ex
 
         SwitchedPowerDevice.__init__(self, self.conf)
 
-        self.pw = pwi4_client.PWI4()
-        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
+        self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'focuser-timer-thread'
         self.timer.start()
         self.logger.info('initialized')
@@ -183,7 +147,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if self.is_active(FocuserActivities.Moving) and not stat.focuser.is_moving:
             self.end_activity(FocuserActivities.Moving)
 
-    def status(self) -> FocuserStatus:
+    def status(self) -> dict:
         """
 
         Returns
@@ -191,7 +155,19 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
             FocuserStatus
 
         """
-        return FocuserStatus(self)
+        stat = self.pw.status()
+        ret = {
+            'powered': self.is_on(),
+            'ascom': AscomDriverInfo(self.ascom),
+            'connected': stat.is_connected,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'moving': stat.focuser.is_moving,
+            'time_stamp': datetime.datetime.now().isoformat()
+        }
+        return ret
 
     @property
     def name(self) -> str:
@@ -199,7 +175,10 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return self.is_on()
+        connected = False
+        if self.ascom:
+            connected = ascom_run(self, f'Connected')
+        return self.is_on() and self.ascom and connected
 
     @property
     def why_not_operational(self) -> List[str]:

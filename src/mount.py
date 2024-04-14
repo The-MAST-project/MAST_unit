@@ -1,3 +1,4 @@
+import datetime
 import time
 
 import win32com.client
@@ -5,71 +6,23 @@ import logging
 
 from PlaneWave import pwi4_client
 from typing import TypeAlias, List
-from enum import IntFlag
-# from utils import Activities, RepeatTimer, AscomDriverInfo, return_with_status, init_log, TimeStamped
-from common.utils import init_log, TimeStamped, Component
+from enum import IntFlag, auto
+from common.utils import init_log, Component
 from common.utils import RepeatTimer, return_with_status
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from common.config import Config
 from common.ascom import AscomDriverInfo, ascom_run
 from common.networking import NetworkedDevice
-# from powered_device import PoweredDevice
 from mastapi import Mastapi
 
 
-MountType: TypeAlias = "Mount"
-
-
-class MountActivity(IntFlag):
-    Idle = 0
-    StartingUp = (1 << 0)
-    ShuttingDown = (1 << 1)
-    Slewing = (1 << 2)
-    Parking = (1 << 3)
-    Tracking = (1 << 4)
-    FindingHome = (1 << 5)
-
-
-class MountStatus(TimeStamped):
-
-    def __init__(self, m: MountType):
-        self.ascom = AscomDriverInfo(m.ascom)
-        self.reasons = list()
-        st = m.pw.status()
-
-        if m.is_on():
-            self.is_connected = m.connected
-            self.is_operational = False
-            if self.is_connected:
-                self.is_operational = \
-                    st.mount.axis0.is_enabled and \
-                    st.mount.axis1.is_enabled
-                if not self.is_operational:
-                    reason = f'one of the axes is not enabled: ' + \
-                        f'axis0={"enabled" if st.mount.axis0.is_enabled else "disabled"} ' + \
-                        f'axis1={"enabled" if st.mount.axis1.is_enabled else "disabled"} '
-                    self.reasons.append(reason)
-                self.is_tracking = st.mount.is_tracking
-                self.is_slewing = st.mount.is_slewing
-                self.ra_j2000_hours = st.mount.ra_j2000_hours
-                self.dec_j2000_degs = st.mount.dec_j2000_degs
-                self.lmst_hours = st.site.lmst_hours
-                self.ha_hours = self.lmst_hours - self.ra_j2000_hours
-                self.activities = m.activities
-                self.activities_verbal = self.activities.name
-                if self.is_tracking:
-                    self.activities |= MountActivity.Tracking
-                if self.is_slewing:
-                    self.activities |= MountActivity.Slewing
-            else:
-                self.reasons.append('not-connected')
-        else:
-            self.is_operational = False
-            self.is_connected = False
-            self.reasons.append('not-powered')
-            self.reasons.append('not-connected')
-
-        self.stamp()
+class MountActivities(IntFlag):
+    StartingUp = auto()
+    ShuttingDown = auto()
+    Slewing = auto()
+    Parking = auto()
+    Tracking = auto()
+    FindingHome = auto()
 
 
 class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
@@ -167,7 +120,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
             self.power_on()
         if not self.connected:
             self.connect()
-        self.start_activity(MountActivity.StartingUp)
+        self.start_activity(MountActivities.StartingUp)
         self.pw.request('/fans/on')
         self.find_home()
 
@@ -179,7 +132,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
         """
         if not self.connected:
             self.connect()
-        self.start_activity(MountActivity.ShuttingDown)
+        self.start_activity(MountActivities.ShuttingDown)
         self.pw.request('/fans/off')
         self.park()
         self.power_off()
@@ -191,7 +144,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(MountActivity.Parking)
+            self.start_activity(MountActivities.Parking)
             self.pw.mount_park()
 
     @return_with_status
@@ -201,7 +154,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
         :mastapi:
         """
         if self.connected:
-            self.start_activity(MountActivity.FindingHome)
+            self.start_activity(MountActivities.FindingHome)
             self.last_axis0_position_degrees = -99999
             self.last_axis1_position_degrees = -99999
             self.pw.mount_find_home()
@@ -211,24 +164,49 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
             return
 
         status = self.pw.status()
-        if self.is_active(MountActivity.FindingHome):
+        if self.is_active(MountActivities.FindingHome):
             if not status.mount.is_slewing:
-                self.end_activity(MountActivity.FindingHome)
-                if self.is_active(MountActivity.StartingUp):
-                    self.end_activity(MountActivity.StartingUp)
+                self.end_activity(MountActivities.FindingHome)
+                if self.is_active(MountActivities.StartingUp):
+                    self.end_activity(MountActivities.StartingUp)
 
-        if self.is_active(MountActivity.Parking):
+        if self.is_active(MountActivities.Parking):
             if not status.mount.is_slewing:
-                self.end_activity(MountActivity.Parking)
-                if self.is_active(MountActivity.ShuttingDown):
-                    self.end_activity(MountActivity.ShuttingDown)
+                self.end_activity(MountActivities.Parking)
+                if self.is_active(MountActivities.ShuttingDown):
+                    self.end_activity(MountActivities.ShuttingDown)
 
-    def status(self) -> MountStatus:
+    def status(self) -> dict:
         """
         Returns the ``mount`` subsystem status
         :mastapi:
         """
-        return MountStatus(self)
+        ret = {
+            'powered': self.switch.detected and self.is_on(),
+            'address': self.conf['network']['address'],
+            'ascom': AscomDriverInfo(self.ascom),
+            'connected': self.connected,
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+        }
+
+        if self.connected:
+            st = self.pw.status()
+            ret['tracking'] = st.mount.is_tracking
+            ret['slewing'] = st.mount.is_slewing
+            ret['axis0_enabled'] = st.mount.axis0.is_enabled,
+            ret['axis1_enabled'] = st.mount.axis1.is_enabled,
+            ret['ra_j2000_hours '] = st.mount.ra_j2000_hours
+            ret['dec_j2000_degs '] = st.mount.dec_j2000_degs
+            ret['ha_hours '] = st.site.lmst_hours - st.mount.ra_j2000_hours
+            ret['lmst_hours '] = st.site.lmst_hours
+            ret['fans'] = True,  # TBD
+
+        ret['time_stamp']: datetime.datetime.now()
+        
+        return ret
 
     @return_with_status
     def start_tracking(self):
@@ -271,7 +249,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice):
         -------
 
         """
-        for activity in MountActivity.FindingHome, MountActivity.StartingUp, MountActivity.ShuttingDown:
+        for activity in MountActivities.FindingHome, MountActivities.StartingUp, MountActivities.ShuttingDown:
             if self.is_active(activity):
                 self.end_activity(activity)
         self.pw.mount_stop()

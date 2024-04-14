@@ -3,33 +3,28 @@ import logging
 import socket
 import psutil
 import guiding
-import utils
 from PlaneWave import pwi4_client
 import time
-from typing import TypeAlias
-import camera
-import covers
-import stage
-import mount
-import focuser
-from powered_device import PowerStatus, SocketId, PoweredDevice, sockets
+from typing import List
+from camera import Camera, CameraActivities
+from covers import Covers, CoverActivities
+from stage import Stage, StageActivities
+from mount import Mount, MountActivities
+from focuser import Focuser, FocuserActivities
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
 import numpy as np
-from utils import return_with_status, Activities, RepeatTimer
-from enum import Flag
+from common.utils import return_with_status, RepeatTimer
+from enum import IntFlag, auto
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from utils import ensure_process_is_running, TimeStamped
-from camera import CameraActivities
+from common.utils import ensure_process_is_running, init_log, Component, path_maker, find_process
 import os
 import subprocess
 from enum import Enum
 import json
-from utils import config
-
-UnitType: TypeAlias = "Unit"
 
 GUIDING_SHM_NAME = 'PlateSolving_Image'
 
@@ -48,137 +43,78 @@ class SolverResponse:
     dec: float
 
 
-class AutofocusResult(TimeStamped):
+class AutofocusResult:
     success: bool
     best_position: float
     tolerance: float
+    time_stamp: str
 
 
-class UnitActivities(Flag):
+class UnitActivities(IntFlag):
     Idle = 0
-    Autofocusing = (1 << 0)
-    Guiding = (1 << 1)
-    StartingUp = (1 << 2)
-    ShuttingDown = (1 << 3)
+    Autofocusing = auto()
+    Guiding = auto()
+    StartingUp = auto()
+    ShuttingDown = auto()
 
 
-class UnitStatus(TimeStamped):
-
-    power: PowerStatus
-    camera: camera.CameraStatus
-    stage: stage.StageStatus
-    mount: mount.MountStatus
-    covers: covers.CoversStatus
-    focuser: focuser.FocuserStatus
-    reasons: dict
-    activities: UnitActivities
-    autofocus: AutofocusResult | None
-
-    def __init__(self, unit: UnitType):
-        self.power = PoweredDevice.status()
-        self.camera = unit.camera.status() if unit.camera is not None else None
-        self.stage = unit.stage.status() if unit.stage is not None else None
-        self.covers = unit.covers.status() if unit.covers is not None else None
-        self.mount = unit.mount.status() if unit.mount is not None else None
-        self.focuser = unit.focuser.status() if unit.focuser is not None else None
-
-        self.is_operational = \
-            (self.mount is not None and self.mount.is_operational) and \
-            (self.camera is not None and self.camera.is_operational) and \
-            (self.covers is not None and self.covers.is_operational) and \
-            (self.focuser is not None and self.focuser.is_operational) and \
-            (self.stage is not None and self.stage.is_operational)
-
-        self.is_guiding = unit.guiding
-        self.is_autofocusing = unit.is_autofocusing
-        self.is_connected = unit.connected
-        self.is_busy = self.is_autofocusing or self.is_guiding
-
-        if not self.is_operational:
-            self.reasons = dict()
-            if self.power and self.power.reasons:
-                self.reasons['power'] = self.power.reasons
-            if self.camera and self.camera.reasons:
-                self.reasons['camera'] = self.camera.reasons
-            if self.mount and self.mount.reasons:
-                self.reasons['mount'] = self.mount.reasons
-            if self.stage and self.stage.reasons:
-                self.reasons['stage'] = self.stage.reasons
-            if self.covers and self.covers.reasons:
-                self.reasons['covers'] = self.covers.reasons
-            if self.focuser and self.focuser.reasons:
-                self.reasons['focuser'] = self.focuser.reasons
-
-        if unit.autofocus_result:
-            self.autofocus = AutofocusResult()
-            self.autofocus.success = unit.autofocus_result.success
-            self.autofocus.best_position = unit.autofocus_result.best_position
-            self.autofocus.tolerance = unit.autofocus_result.tolerance
-            self.autofocus.stamp = unit.autofocus_result.stamp
-
-        self.stamp()
-
-
-class Unit(Activities):
-    
-    logger: logging.Logger
-    MAX_UNITS = 20
-
-    _connected: bool = False
-    _is_guiding: bool = False
-    _is_autofocusing = False
-    id = None
-    activities: UnitActivities = UnitActivities.Idle
-    shm: SharedMemory | None
-
-    reasons: list = []   # list of reasons for the last failure
-    mount: mount
-    covers: covers
-    stage: stage
-    focuser: focuser
-    pw: pwi4_client.PWI4
-    autofocus_result: AutofocusResult
-
-    timer: RepeatTimer
-    plate_solver_process: psutil.Process | subprocess.Popen
-
-    # Stuff for plate solving
-    was_tracking_before_guiding: bool
-    sock_to_solver = None
+class Unit(Component):
 
     GUIDING_EXPOSURE_SECONDS = 5
     GUIDING_INTER_EXPOSURE_SECONDS = 30
+    MAX_UNITS = 20
 
     def __init__(self, unit_id: int):
-        self.logger = logging.getLogger('mast.unit')
-        utils.init_log(self.logger)
-        if unit_id < 0 or unit_id > self.MAX_UNITS:
-            raise f'Unit id must be between 0 and {self.MAX_UNITS}'
+        Component.__init__(self)
+
+        self._connected: bool = False
+        self._is_guiding: bool = False
+        self._is_autofocusing: bool = False
+        self.shm: SharedMemory | None = None
+
+        self.plate_solver_process: psutil.Process | subprocess.Popen | None = None
+
+        # Stuff for plate solving
+        self.was_tracking_before_guiding: bool = False
+        self.sock_to_solver: socket = None
+
+        self.logger: logging.Logger = logging.getLogger('mast.unit')
+        init_log(self.logger)
+        if unit_id < 0 or unit_id > Unit.MAX_UNITS:
+            raise f'Unit id must be between 0 and {Unit.MAX_UNITS}'
 
         self.id = unit_id
         try:
-            self.pw = pwi4_client.PWI4()
-            self.camera = camera.Camera(config.get('camera', 'AscomDriver'))
-            self.covers = covers.Covers(config.get('covers', 'AscomDriver'))
-            self.focuser = focuser.Focuser(config.get('focuser', 'AscomDriver'))
-            self.mount = mount.Mount()
-            self.stage = stage.Stage()
+            self.mount: Mount = Mount()
+            self.camera: Camera = Camera()
+            self.covers: Covers = Covers()
+            self.stage: Stage = Stage()
+            self.focuser: Focuser = Focuser()
+            self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
         except Exception as ex:
             self.logger.exception(msg='could not create a Unit', exc_info=ex)
             raise ex
 
-        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.components: List[Component] = [
+            self.mount,
+            self.camera,
+            self.covers,
+            self.focuser,
+            self.stage,
+        ]
+
+        self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'unit-timer-thread'
         self.timer.start()
 
         self.shm = None
-        self.autofocus_result = None
-        log_filename = os.path.join(utils.path_maker.make_daily_folder_name(), 'log.txt')
+        self.autofocus_result: AutofocusResult | None = None
+        log_filename = os.path.join(path_maker.make_daily_folder_name(), 'log.txt')
         self.logger.info('initialized')
         self.logger.info(f'logging to {log_filename}')
 
     def do_startup(self):
-        self.start_activity(UnitActivities.StartingUp, self.logger)
+        self.start_activity(UnitActivities.StartingUp)
         self.mount.startup()
         self.stage.startup()
         self.camera.startup()
@@ -201,7 +137,7 @@ class Unit(Activities):
         Thread(name='startup-thread', target=self.do_startup).start()
 
     def do_shutdown(self):
-        self.start_activity(UnitActivities.ShuttingDown, self.logger)
+        self.start_activity(UnitActivities.ShuttingDown)
         self.mount.shutdown()
         self.covers.shutdown()
         self.camera.shutdown()
@@ -279,7 +215,7 @@ class Unit(Activities):
         while not self.pw.status().autofocus.is_running:        # wait for it to actually start
             self.logger.debug('waiting for PlaneWave autofocus to start')
             time.sleep(1)
-        self.start_activity(UnitActivities.Autofocusing, self.logger)
+        self.start_activity(UnitActivities.Autofocusing)
         self.logger.debug('PlaneWave autofocus has started')
 
     @return_with_status
@@ -297,7 +233,7 @@ class Unit(Activities):
             self.logger.info("Cannot stop PlaneWave autofocus, it is not running")
             return
         self.pw.request("/autofocus/stop")
-        self.end_activity(UnitActivities.Autofocusing, self.logger)
+        self.end_activity(UnitActivities.Autofocusing)
 
     @property
     def is_autofocusing(self) -> bool:
@@ -326,7 +262,7 @@ class Unit(Activities):
             except FileNotFoundError:
                 self.shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=self.camera.NumX*self.camera.NumY*4)
 
-        proc = utils.find_process(patt='PSSimulator')
+        proc = find_process(patt='PSSimulator')
         if proc:
             proc.kill()
             self.logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
@@ -337,7 +273,7 @@ class Unit(Activities):
         subprocess.Popen(sim_cmd, cwd=sim_dir, shell=True)
         start = time.time()
         while time.time() - start <= 20:
-            self.plate_solver_process = utils.find_process(patt='PSSimulator')
+            self.plate_solver_process = find_process(patt='PSSimulator')
             if self.plate_solver_process:
                 break
             else:
@@ -470,7 +406,7 @@ class Unit(Activities):
             self.pw.mount_tracking_on()
             self.logger.info('started mount tracking')
 
-        self.start_activity(UnitActivities.Guiding, self.logger)
+        self.start_activity(UnitActivities.Guiding)
         Thread(name='guiding-thread', target=self.do_guide).start()
 
     @return_with_status
@@ -485,7 +421,7 @@ class Unit(Activities):
             return
 
         if self.is_active(UnitActivities.Guiding):
-            self.end_activity(UnitActivities.Guiding, self.logger)
+            self.end_activity(UnitActivities.Guiding)
 
         if self.plate_solver_process:
             try:
@@ -515,7 +451,9 @@ class Unit(Activities):
 
         :mastapi:
         """
-        PoweredDevice.all_on()
+        for c in self.components:
+            if isinstance(c, SwitchedPowerDevice):
+                c.power_on()
 
     @return_with_status
     def power_all_off(self):
@@ -524,52 +462,43 @@ class Unit(Activities):
 
         :mastapi:
         """
-        PoweredDevice.all_off()
+        for c in self.components:
+            if isinstance(c, SwitchedPowerDevice):
+                c.power_off()
 
-    @return_with_status
-    def power_on(self, socket_id: SocketId | str):
-        """
-        Turn power **ON** to the specified power socket
-
-        Parameters
-        ----------
-        socket_id : int | str
-            The socket to power **ON**.  Either the socket number or the socket name
-        :mastapi:
-        """
-        if isinstance(socket_id, str):
-            socket_id = SocketId(socket_id)
-        for sock in sockets:
-            if sock.id.name == socket_id.name:
-                sock.dev.power_on()
-                return
-
-    @return_with_status
-    def power_off(self, socket_id: SocketId | str):
-        """
-        Turn power **OFF** to the specified power socket
-
-        Parameters
-        ----------
-        socket_id : int | str
-            The socket to power **OFF**.  Either the socket number or the socket name
-        :mastapi:
-        """
-        if isinstance(socket_id, str):
-            socket_id = SocketId(socket_id)
-        for sock in sockets:
-            if sock.id.name == socket_id.name:
-                sock.dev.power_off()
-                return
-
-    def status(self) -> UnitStatus:
+    def status(self) -> dict:
         """
         Returns
         -------
         UnitStatus
         :mastapi:
         """
-        return UnitStatus(self)
+        ret = {
+            # 'power':
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'connected': self.connected,
+            'guiding': self.guiding,
+            'autofocusing': self.is_autofocusing,
+            'busy': self.is_autofocusing or self.is_guiding,
+            'mount': self.mount.status(),
+            'camera': self.camera.status(),
+            'stage': self.stage.status(),
+            'covers': self.covers.status(),
+            'focuser': self.focuser.status(),
+            'time_stamp': datetime.datetime.now().isoformat()
+        }
+
+        if self.autofocus_result:
+            ret['autofocus'] = {}
+            ret['autofocus']['success'] = self.autofocus_result.success
+            ret['autofocus']['best_position'] = self.autofocus_result.best_position
+            ret['autofocus']['tolerance'] = self.autofocus_result.tolerance
+            ret['autofocus']['time_stamp'] = self.autofocus_result.time_stamp
+
+        return ret
 
     @staticmethod
     def quit():
@@ -674,35 +603,34 @@ class Unit(Activities):
     def ontimer(self):
 
         if self.is_active(UnitActivities.StartingUp):
-            if not (self.mount.is_active(mount.MountActivity.StartingUp) or
-                    self.camera.is_active(camera.CameraActivities.StartingUp) or
-                    self.stage.is_active(stage.StageActivities.StartingUp) or
-                    self.focuser.is_active(focuser.FocuserActivities.StartingUp) or
-                    self.covers.is_active(covers.CoverActivities.StartingUp) or
-                    self.mount.is_active(mount.MountActivity.StartingUp)):
-                self.end_activity(UnitActivities.StartingUp, self.logger)
+            if not (self.mount.is_active(MountActivities.StartingUp) or
+                    self.camera.is_active(CameraActivities.StartingUp) or
+                    self.stage.is_active(StageActivities.StartingUp) or
+                    self.focuser.is_active(FocuserActivities.StartingUp) or
+                    self.covers.is_active(CoverActivities.StartingUp)):
+                self.end_activity(UnitActivities.StartingUp)
                 
         if self.is_active(UnitActivities.ShuttingDown):
-            if not (self.mount.is_active(mount.MountActivity.ShuttingDown) or
-                    self.camera.is_active(camera.CameraActivities.ShuttingDown) or
-                    self.stage.is_active(stage.StageActivities.ShuttingDown) or
-                    self.focuser.is_active(focuser.FocuserActivities.ShuttingDown) or
-                    self.covers.is_active(covers.CoverActivities.ShuttingDown) or
-                    self.mount.is_active(mount.MountActivity.ShuttingDown)):
-                self.end_activity(UnitActivities.ShuttingDown, self.logger)
+            if not (self.mount.is_active(MountActivities.ShuttingDown) or
+                    self.camera.is_active(CameraActivities.ShuttingDown) or
+                    self.stage.is_active(StageActivities.ShuttingDown) or
+                    self.focuser.is_active(FocuserActivities.ShuttingDown) or
+                    self.covers.is_active(CoverActivities.ShuttingDown) or
+                    self.mount.is_active(MountActivities.ShuttingDown)):
+                self.end_activity(UnitActivities.ShuttingDown)
 
         if self.is_active(UnitActivities.Autofocusing):
             autofocus_status = self.pw.status().autofocus
             if not autofocus_status:
                 self.logger.error('Empty PlaneWave autofocus status')
             elif not autofocus_status.is_running:   # it's done
-                    self.logger.info('PlaneWave autofocus ended, getting status.')
-                    self.autofocus_result.success = autofocus_status.success
-                    self.autofocus_result.best_position = autofocus_status.best_position
-                    self.autofocus_result.tolerance = autofocus_status.tolerance
-                    self.autofocus_result.stamp()
+                self.logger.info('PlaneWave autofocus ended, getting status.')
+                self.autofocus_result.success = autofocus_status.success
+                self.autofocus_result.best_position = autofocus_status.best_position
+                self.autofocus_result.tolerance = autofocus_status.tolerance
+                self.autofocus_result.time_stamp = datetime.datetime.now().isoformat()
 
-                    self.end_activity(UnitActivities.Autofocusing, self.logger)
+                self.end_activity(UnitActivities.Autofocusing)
             else:
                 self.logger.info('PlaneWave autofocus in progress')
 
@@ -732,3 +660,19 @@ class Unit(Activities):
                                   cmd="C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Shutter Control/PWShutter.exe",
                                   logger=self.logger,
                                   shell=True)
+
+    @property
+    def operational(self) -> bool:
+        return all([c.operational for c in self.components])
+
+    @property
+    def why_not_operational(self) -> List[str]:
+        ret = []
+        for c in self.components:
+            for reason in c.why_not_operational:
+                ret.append(reason)
+        return ret
+
+    @property
+    def name(self) -> str:
+        return 'unit'

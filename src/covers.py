@@ -1,16 +1,15 @@
+import datetime
+
 import win32com.client
 import logging
 from enum import IntFlag, Enum
-from typing import TypeAlias, List
+from typing import List
 
-from common.utils import return_with_status, RepeatTimer, init_log, TimeStamped, Component
+from common.utils import return_with_status, RepeatTimer, init_log, Component
 from common.ascom import AscomDriverInfo, ascom_run
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from mastapi import Mastapi
-
-
-CoversStateType: TypeAlias = "CoversState"
 
 
 class CoverActivities(IntFlag):
@@ -21,16 +20,7 @@ class CoverActivities(IntFlag):
     ShuttingDown = (1 << 3)
 
 
-class CoversStatus(TimeStamped):
-    is_on: bool
-    is_connected: bool
-    is_operational: bool
-    state: CoversStateType
-    state_verbal: str
-    reasons: list[str] = None
-    activities: CoverActivities = CoverActivities.Idle
-
-
+# https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CoverStatus.htm
 class CoversState(Enum):
     NotPresent = 0
     Closed = 1
@@ -45,12 +35,12 @@ class Covers(Mastapi, Component, SwitchedPowerDevice):
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
 
-    def __init__(self, driver: str):
+    def __init__(self):
         self.conf: dict = Config().toml['covers']
         self.logger: logging.Logger = logging.getLogger('mast.unit.covers')
         init_log(self.logger)
         try:
-            self.ascom = win32com.client.Dispatch(driver)
+            self.ascom = win32com.client.Dispatch(self.conf['AscomDriver'])
         except Exception as ex:
             self.logger.exception(ex)
             raise ex
@@ -106,35 +96,23 @@ class Covers(Mastapi, Component, SwitchedPowerDevice):
     def state(self) -> CoversState:
         return CoversState(ascom_run(self, 'CoverState'))
 
-    def status(self) -> CoversStatus:
+    def status(self) -> dict:
         """
         :mastapi:
         """
-        st = CoversStatus()
-        st.reasons = list()
-        st.ascom = AscomDriverInfo(self.ascom)
-        st.state = self.state()
-        st.is_on = self.is_on()
-        if self.is_on():
-            st.is_connected = self.connected
-            st.is_operational = False
-            if st.is_connected:
-                st.is_operational = st.state == CoversState.Open
-                if not st.is_operational:
-                    st.reasons.append(f'state is {st.state} instead of {CoversState.Open}')
-                st.state = self.state()
-                st.state_verbal = st.state.name
-                st.activities = self.activities
-                st.activities_verbal = self.activities.name
-            else:
-                st.reasons.append('not-connected')
-        else:
-            st.is_connected = False
-            st.is_operational = False
-            st.reasons.append('not-powered')
-            st.reasons.append('not-connected')
-        st.stamp()
-        return st
+        ret = {
+            'ascom': AscomDriverInfo(self.ascom),
+            'powered': self.is_on(),
+            'connected': self.connected,
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+            'state': self.state(),
+            'state_verbal': self.state().name,
+            'time_stamp': datetime.datetime.now().isoformat(),
+        }
+        return ret
 
     @return_with_status
     def open(self):

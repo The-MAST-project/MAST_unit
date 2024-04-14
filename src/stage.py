@@ -297,7 +297,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         st.is_operational = len(st.reasons) == 0
 
         st.position = self.position if self.connected else None
-        st.stamp()
+        st.time_stamp()
         return st
 
     @staticmethod

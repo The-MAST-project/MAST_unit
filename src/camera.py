@@ -2,7 +2,7 @@ import datetime
 import socket
 
 import win32com.client
-from typing import TypeAlias, List
+from typing import List
 import logging
 import astropy.units as u
 from enum import IntFlag, Enum
@@ -10,12 +10,10 @@ from threading import Thread
 
 from common.utils import RepeatTimer, return_with_status, init_log
 from common.ascom import AscomDriverInfo, ascom_run
-from common.utils import path_maker, image_to_fits, TimeStamped, Component
+from common.utils import path_maker, image_to_fits, Component
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from mastapi import Mastapi
-
-CameraType: TypeAlias = "Camera"
 
 
 class CameraState(Enum):
@@ -51,57 +49,15 @@ class CameraExposure:
         self.date = None
 
 
-class CameraStatus(TimeStamped):
-
-    is_operational: bool
-    temperature: float
-    cooler_power: float  # percent
-    state: CameraState
-    latest_exposure: None | CameraExposure
-
-    reasons: list[str]
-
-    def __init__(self, c: CameraType):
-        self.ascom = AscomDriverInfo(c.ascom)
-        self.reasons = list()
-        self.is_powered = c.is_on()
-        self.is_operational = False
-        if self.is_powered:
-            self.is_connected = c.connected
-            if self.is_connected:
-                set_point = c.operational_set_point
-                self.temperature = c.ascom.CCDTemperature
-                self.is_operational = abs(self.temperature - set_point) <= 0.5
-                if not self.is_operational:
-                    self.reasons.append(f'temperature: abs({self.temperature} - {set_point}) > 0.5 deg')
-                self.cooler_power = c.ascom.CoolerPower
-                self.state_verbal = str(CameraState(c.ascom.CameraState))
-            else:
-                self.reasons.append('not-connected')
-        else:
-            self.is_operational = False
-            self.is_connected = False
-            self.reasons.append('not-powered')
-            self.reasons.append('not-connected')
-        self.activities = c.activities
-        self.activities_verbal = self.activities.name
-        self.latest_exposure = CameraExposure()
-        if c.latest_exposure is not None:
-            self.latest_exposure.file = c.latest_exposure.file
-            self.latest_exposure.seconds = c.latest_exposure.seconds
-            self.latest_exposure.date = c.latest_exposure.date
-        self.stamp()
-
-
 class Camera(Mastapi, Component, SwitchedPowerDevice):
 
-    def __init__(self, driver: str):
+    def __init__(self):
         self.conf = Config().toml['camera']
         Component.__init__(self)
         self.logger: logging.Logger = logging.getLogger('mast.unit.camera')
         init_log(self.logger)
         try:
-            self.ascom = win32com.client.Dispatch(driver)
+            self.ascom = win32com.client.Dispatch(self.conf['AscomDriver'])
         except Exception as ex:
             self.logger.exception(ex)
             raise ex
@@ -231,7 +187,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice):
         if self.is_active(CameraActivities.Exposing):
             ascom_run(self, 'StopExposure()')  # the timer will read the image
 
-    def status(self) -> CameraStatus:
+    def status(self) -> dict:
         """
         Gets the **MAST** camera status
 
@@ -240,7 +196,26 @@ class Camera(Mastapi, Component, SwitchedPowerDevice):
         -------
 
         """
-        return CameraStatus(self)
+        ret = {
+            'powered':  self.is_on(),
+            'ascom':    AscomDriverInfo(self.ascom),
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'connected': self.connected,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+        }
+        if self.connected:
+            ret['set_point'] = self.operational_set_point
+            ret['temperature'] = self.ascom.CCDTemperature
+            if self.latest_exposure:
+                ret['latest_exposure'] = {}
+                ret['latest_exposure']['file'] = self.latest_exposure.file
+                ret['latest_exposure']['seconds'] = self.latest_exposure.seconds
+                ret['latest_exposure']['date'] = self.latest_exposure.date
+        ret['time_stamp'] = str(datetime.datetime.now())
+
+        return ret
 
     @return_with_status
     def startup(self):
@@ -379,11 +354,30 @@ class Camera(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return self.ascom is not None  # powered?
+        if not all([self.switch.detected, self.is_on(), self.ascom, self.ascom.connected]):
+            return False
+        temp = ascom_run(self, 'CCDTemperature')
+        if abs(temp - self.operational_set_point) > 0.5:
+            return False
+        return True
 
     @property
     def why_not_operational(self) -> List[str]:
+        label = 'camera'
         ret = []
+        if not self.switch.detected:
+            ret.append(f"{label}: power switch '{self.switch.name}' (at '{self.switch.ipaddress}') not detected")
+        elif not self.is_on():
+            ret.append(f"{label}: not powered ON")
+        elif not self.ascom:
+            ret.append(f"{label}: no ASCOM attribute")
+        elif not self.ascom.connected:
+            ret.append(f"not ASCOM connected")
+        else:
+            temp = ascom_run(self, 'CCDTemperature')
+            if abs(temp - self.operational_set_point) > 0.5:
+                ret.append(f"{label}: temperature ({temp}) not within .5 degrees from {self.operational_set_point}")
+
         return ret
 
     @property
