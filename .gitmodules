@@ -1,0 +1,6 @@
+[submodule "src/common"]
+	path = src/common
+	url = https://github.com/blumzi/MAST_common
+[submodule "src/dlipower"]
+	path = src/dlipower
+	url = http://github.com/blumzi/python-dlipower

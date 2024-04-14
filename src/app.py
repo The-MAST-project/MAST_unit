@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from PlaneWave import pwi4_client
 from unit import Unit
-from utils import init_log, PrettyJSONResponse, HelpResponse, quote, Subsystem
+from common.utils import init_log, HelpResponse, quote, Subsystem
 import inspect
 from mastapi import Mastapi
 from openapi import make_openapi_schema
@@ -10,7 +10,7 @@ import logging
 from contextlib import asynccontextmanager
 import psutil
 import os
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 
 unit_id = 17
@@ -55,7 +55,8 @@ app = FastAPI(
     docs_url='/docs',
     redocs_url=None,
     lifespan=lifespan,
-    openapi_url='/openapi.json')
+    openapi_url='/openapi.json',
+    default_response_class=ORJSONResponse)
 
 root = '/mast/api/v1/'
 
@@ -110,7 +111,7 @@ make_openapi_schema(app=app, subsystems=subsystems)
 get_api_methods(subs=subsystems)
 
 
-@app.get(root + '{subsystem}/{method}', response_class=PrettyJSONResponse)
+@app.get(root + '{subsystem}/{method}')
 async def do_item(subsystem: str, method: str, request: Request):
 
     sub = [s for s in subsystems if s.path == subsystem]

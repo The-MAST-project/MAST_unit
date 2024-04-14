@@ -2,19 +2,17 @@ import datetime
 
 import win32com.client
 import logging
-from enum import Enum, Flag
-from typing import TypeAlias
+from enum import IntFlag, Enum
+from typing import List
 
-import utils
-from utils import AscomDriverInfo, return_with_status, Activities, RepeatTimer, init_log, TimeStamped
-from powered_device import PoweredDevice
+from common.utils import return_with_status, RepeatTimer, init_log, Component
+from common.ascom import AscomDriverInfo, ascom_run
+from common.config import Config
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from mastapi import Mastapi
 
 
-CoversStateType: TypeAlias = "CoversState"
-
-
-class CoverActivities(Flag):
+class CoverActivities(IntFlag):
     Idle = 0
     Opening = (1 << 0)
     Closing = (1 << 1)
@@ -22,16 +20,7 @@ class CoverActivities(Flag):
     ShuttingDown = (1 << 3)
 
 
-class CoversStatus(TimeStamped):
-    is_powered: bool
-    is_connected: bool
-    is_operational: bool
-    state: CoversStateType
-    state_verbal: str
-    reasons: list[str] = None
-    activities: CoverActivities = CoverActivities.Idle
-
-
+# https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CoverStatus.htm
 class CoversState(Enum):
     NotPresent = 0
     Closed = 1
@@ -41,33 +30,29 @@ class CoversState(Enum):
     Error = 5
 
 
-class Covers(Mastapi, Activities, PoweredDevice):
+class Covers(Mastapi, Component, SwitchedPowerDevice):
     """
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
-    logger: logging.Logger
-    ascom = None
-    timer: RepeatTimer
-    activities: CoverActivities = CoverActivities.Idle
-    _connected: bool
 
-    def __init__(self, driver: str):
-        self.logger = logging.getLogger('mast.unit.covers')
+    def __init__(self):
+        self.conf: dict = Config().toml['covers']
+        self.logger: logging.Logger = logging.getLogger('mast.unit.covers')
         init_log(self.logger)
         try:
-            self.ascom = win32com.client.Dispatch(driver)
+            self.ascom = win32com.client.Dispatch(self.conf['AscomDriver'])
         except Exception as ex:
             self.logger.exception(ex)
             raise ex
 
-        PoweredDevice.__init__(self, 'Covers', self)
-        Activities.__init__(self)
+        SwitchedPowerDevice.__init__(self, self.conf)
+        Component.__init__(self)
 
-        self.timer = RepeatTimer(2, self.ontimer)
+        self.timer: RepeatTimer = RepeatTimer(2, self.ontimer)
         self.timer.name = 'covers-timer-thread'
         self.timer.start()
 
-        self._connected = False
+        self._connected: bool = False
 
         self.logger.info('initialized')
 
@@ -92,13 +77,13 @@ class Covers(Mastapi, Activities, PoweredDevice):
         #     return self.ascom.Connected
         # else:
         #     return False
-        return self._connected # TODO: remove me
+        return self._connected  # TODO: remove me
 
     @connected.setter
     def connected(self, value):
         self.logger.info(f"connected = {value}")
         try:
-            utils.ascom_run(self, f'Connected = {value}')
+            ascom_run(self, f'Connected = {value}')
             self._connected = value     # TODO: remove me
         except Exception as ex:
             if (hasattr(ex, "excepinfo") and ex.excepinfo[1] == "PWShutter_ASCOM" and
@@ -106,40 +91,28 @@ class Covers(Mastapi, Activities, PoweredDevice):
                 pass
             else:
                 self.logger.error(f"failed to set connected to '{value}'", exc_info=ex)
-                utils.ascom_run(self, f'Connected = {value}')
+                ascom_run(self, f'Connected = {value}')
 
     def state(self) -> CoversState:
-        return CoversState(utils.ascom_run(self, 'CoverState'))
+        return CoversState(ascom_run(self, 'CoverState'))
 
-    def status(self) -> CoversStatus:
+    def status(self) -> dict:
         """
         :mastapi:
         """
-        st = CoversStatus()
-        st.reasons = list()
-        st.ascom = AscomDriverInfo(self.ascom)
-        st.state = self.state()
-        st.is_powered = self.is_powered
-        if self.is_powered:
-            st.is_connected = self.connected
-            st.is_operational = False
-            if st.is_connected:
-                st.is_operational = st.state == CoversState.Open
-                if not st.is_operational:
-                    st.reasons.append(f'state is {st.state} instead of {CoversState.Open}')
-                st.state = self.state()
-                st.state_verbal = st.state.name
-                st.activities = self.activities
-                st.activities_verbal = self.activities.name
-            else:
-                st.reasons.append('not-connected')
-        else:
-            st.is_connected = False
-            st.is_operational = False
-            st.reasons.append('not-powered')
-            st.reasons.append('not-connected')
-        st.stamp()
-        return st
+        ret = {
+            'ascom': AscomDriverInfo(self.ascom),
+            'powered': self.is_on(),
+            'connected': self.connected,
+            'operational': self.operational,
+            'why_not_operational': self.why_not_operational,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
+            'state': self.state(),
+            'state_verbal': self.state().name,
+            'time_stamp': datetime.datetime.now().isoformat(),
+        }
+        return ret
 
     @return_with_status
     def open(self):
@@ -152,8 +125,8 @@ class Covers(Mastapi, Activities, PoweredDevice):
             return
 
         self.logger.info('opening covers')
-        self.start_activity(CoverActivities.Opening, self.logger)
-        utils.ascom_run(self, 'OpenCover()')
+        self.start_activity(CoverActivities.Opening)
+        ascom_run(self, 'OpenCover()')
 
     @return_with_status
     def close(self):
@@ -165,8 +138,8 @@ class Covers(Mastapi, Activities, PoweredDevice):
             return
 
         self.logger.info('closing covers')
-        self.start_activity(CoverActivities.Closing, self.logger)
-        utils.ascom_run(self, 'CloseCover()')
+        self.start_activity(CoverActivities.Closing)
+        ascom_run(self, 'CloseCover()')
 
     @return_with_status
     def startup(self):
@@ -175,12 +148,12 @@ class Covers(Mastapi, Activities, PoweredDevice):
 
         :mastapi:
         """
-        if not self.is_powered:
+        if not self.is_on():
             self.power_on()
         if not self.connected:
             self.connect()
         if self.state() != CoversState.Open:
-            self.start_activity(CoverActivities.StartingUp, self.logger)
+            self.start_activity(CoverActivities.StartingUp)
             self.open()
 
     @return_with_status
@@ -193,7 +166,7 @@ class Covers(Mastapi, Activities, PoweredDevice):
         if not self.connected:
             return
 
-        self.start_activity(CoverActivities.ShuttingDown, self.logger)
+        self.start_activity(CoverActivities.ShuttingDown)
         if self.state() != CoversState.Closed:
             self.close()
 
@@ -204,11 +177,11 @@ class Covers(Mastapi, Activities, PoweredDevice):
         -------
 
         """
-        utils.ascom_run(self, 'HaltCover()')
+        ascom_run(self, 'HaltCover()')
         for activity in (CoverActivities.StartingUp, CoverActivities.ShuttingDown,
                          CoverActivities.Closing, CoverActivities.Opening):
             if self.is_active(activity):
-                self.end_activity(activity, self.logger)
+                self.end_activity(activity)
 
     def ontimer(self):
         if not self.connected:
@@ -216,12 +189,25 @@ class Covers(Mastapi, Activities, PoweredDevice):
 
         # self.logger.debug(f"activities: {self.activities}, state: {self.state()}")
         if self.is_active(CoverActivities.Opening) and self.state() == CoversState.Open:
-            self.end_activity(CoverActivities.Opening, self.logger)
+            self.end_activity(CoverActivities.Opening)
             if self.is_active(CoverActivities.StartingUp):
-                self.end_activity(CoverActivities.StartingUp, self.logger)
+                self.end_activity(CoverActivities.StartingUp)
 
         if self.is_active(CoverActivities.Closing) and self.state() == CoversState.Closed:
-            self.end_activity(CoverActivities.Closing, self.logger)
+            self.end_activity(CoverActivities.Closing)
             if self.is_active(CoverActivities.ShuttingDown):
-                self.end_activity(CoverActivities.ShuttingDown, self.logger)
+                self.end_activity(CoverActivities.ShuttingDown)
                 self.power_off()
+
+    @property
+    def name(self) -> str:
+        return 'covers'
+
+    @property
+    def operational(self) -> bool:
+        return True  # ?!?
+
+    @property
+    def why_not_operational(self) -> List[str]:
+        ret = []
+        return ret
