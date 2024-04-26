@@ -93,8 +93,7 @@ class PoweredDevice:
                 return
         raise f"No socket named '{socket_name}'"
 
-    @return_with_status
-    def power(self, wanted_state: PowerState | str):
+        def power(self, wanted_state: PowerState | str):
         if isinstance(wanted_state, str):
             wanted_state = PowerState(wanted_state)
 
