@@ -1,6 +1,9 @@
 [global]
   TopFolder = "C:\\MAST"
 
+[server]
+  port = 8000
+
 [mount]
   power = {'switch'=1, 'outlet'=1}
   network = {'address'='192.168.30.42'}
@@ -8,15 +11,32 @@
 [stage]
   SpectraPosition =  100000
   ImagePosition = 10000
-  power = {'switch'=1, 'outlet'=2}
+  power = {'switch'=1, 'outlet'=2, delay-after-on=5}
 
 [camera]
-  AscomDriver = "ASCOM.PlaneWaveVirtual.Camera"
-  power = {'switch'=1, 'outlet'=3}
+  ascom_driver = "ASCOM.ASICamera2.Camera"
+  power = {'switch'=1, 'outlet'=3, delay-after-on=2}
+  temp_check_interval = 10
 
 [focuser]
-  AscomDriver = "ASCOM.PWI4.Focuser"
+  ascom_driver = "ASCOM.PWI4.Focuser"
   power = {'switch'=1, 'outlet'=4}
+  known_as_good_position = 15000
 
 [covers]
-  AscomDriver = "ASCOM.PlaneWave.CoverCalibrator"
+  ascom_driver = "ASCOM.PlaneWave.CoverCalibrator"
+  power = {'switch'=1, 'outlet'=5}
+
+[power-switch.1]
+    network = {address="192.168.0.100"}
+    user = "admin"
+    password = "1234"
+    cycle_time = 5
+    outlets = {1="Mount", 2="Stage", 3="Camera", 4="Focuser", 5="Covers"}
+    timeout = 20
+
+[network]
+  interface = "Ethernet 2"
+  address = "192.168.0.1"
+  mask = "255.255.0.0"
+  cidr = 16
