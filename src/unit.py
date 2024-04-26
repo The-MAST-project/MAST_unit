@@ -1,4 +1,5 @@
 import datetime
+from itertools import chain
 import logging
 import socket
 import psutil
@@ -16,11 +17,12 @@ from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
 import numpy as np
-from common.utils import return_with_status, RepeatTimer
+from common.utils import RepeatTimer
 from enum import IntFlag, auto
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from common.utils import ensure_process_is_running, init_log, Component, path_maker, find_process
+from common.utils import ensure_process_is_running, init_log, Component, path_maker
+from common.utils import find_process, time_stamp, CanonicalResponse
 import os
 import subprocess
 from enum import Enum
@@ -64,6 +66,13 @@ class Unit(Component):
     GUIDING_INTER_EXPOSURE_SECONDS = 30
     MAX_UNITS = 20
 
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(Unit, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self, unit_id: int):
         Component.__init__(self)
 
@@ -80,8 +89,9 @@ class Unit(Component):
 
         self.logger: logging.Logger = logging.getLogger('mast.unit')
         init_log(self.logger)
-        if unit_id < 0 or unit_id > Unit.MAX_UNITS:
-            raise f'Unit id must be between 0 and {Unit.MAX_UNITS}'
+
+        if not 1 <= unit_id <= Unit.MAX_UNITS:
+            raise f"Bad unit id '{unit_id}', must be in [1..{Unit.MAX_UNITS}]"
 
         self.id = unit_id
         try:
@@ -115,13 +125,8 @@ class Unit(Component):
 
     def do_startup(self):
         self.start_activity(UnitActivities.StartingUp)
-        self.mount.startup()
-        self.stage.startup()
-        self.camera.startup()
-        self.covers.startup()
-        self.focuser.startup()
+        [comp.startup() for comp in self.components]
 
-    @return_with_status
     def startup(self):
         """
         Starts the **MAST** ``unit`` subsystem.  Makes it ``operational``.
@@ -135,16 +140,12 @@ class Unit(Component):
             return
 
         Thread(name='startup-thread', target=self.do_startup).start()
+        return CanonicalResponse.ok
 
     def do_shutdown(self):
         self.start_activity(UnitActivities.ShuttingDown)
-        self.mount.shutdown()
-        self.covers.shutdown()
-        self.camera.shutdown()
-        self.stage.shutdown()
-        self.focuser.shutdown()
+        [comp.shutdown() for comp in self.components]
 
-    @return_with_status
     def shutdown(self):
         """
         Shuts down the **MAST** ``unit`` subsystem.  Makes it ``idle``.
@@ -158,12 +159,11 @@ class Unit(Component):
             return
 
         Thread(name='shutdown-thread', target=self.do_shutdown).start()
+        return CanonicalResponse.ok
 
     @property
     def connected(self):
-        pw_status = self.pw.status()
-        return pw_status.mount.is_connected and self.camera.connected and self.stage.connected and \
-            self.covers.connected and self.focuser.connected
+        return all([comp.connected for comp in self.components])
 
     @connected.setter
     def connected(self, value):
@@ -171,14 +171,12 @@ class Unit(Component):
         Should connect/disconnect anything that needs connecting/disconnecting
 
         """
-
         self.mount.connected = value
         self.camera.connected = value
         self.covers.connected = value
         self.stage.connected = value
         self.focuser.connected = value
 
-    @return_with_status
     def connect(self):
         """
         Connects the **MAST** ``unit`` subsystems to all its ancillaries.
@@ -186,8 +184,8 @@ class Unit(Component):
         :mastapi:
         """
         self.connected = True
+        return CanonicalResponse.ok
 
-    @return_with_status
     def disconnect(self):
         """
         Disconnects the **MAST** ``unit`` subsystems from all its ancillaries.
@@ -195,8 +193,8 @@ class Unit(Component):
         :mastapi:
         """
         self.connected = False
+        return CanonicalResponse.ok
 
-    @return_with_status
     def start_autofocus(self):
         """
         Starts the ``autofocus`` routine (implemented by _PlaneWave_)
@@ -217,8 +215,8 @@ class Unit(Component):
             time.sleep(1)
         self.start_activity(UnitActivities.Autofocusing)
         self.logger.debug('PlaneWave autofocus has started')
+        return CanonicalResponse.ok
 
-    @return_with_status
     def stop_autofocus(self):
         """
         Stops the ``autofocus`` routine
@@ -234,6 +232,7 @@ class Unit(Component):
             return
         self.pw.request("/autofocus/stop")
         self.end_activity(UnitActivities.Autofocusing)
+        return CanonicalResponse.ok
 
     @property
     def is_autofocusing(self) -> bool:
@@ -386,7 +385,6 @@ class Unit(Component):
                     return
                 time.sleep(1)
 
-    @return_with_status
     def start_guiding(self):
         """
         Starts the ``autoguide`` routine
@@ -409,7 +407,6 @@ class Unit(Component):
         self.start_activity(UnitActivities.Guiding)
         Thread(name='guiding-thread', target=self.do_guide).start()
 
-    @return_with_status
     def stop_guiding(self):
         """
         Stops the ``autoguide`` routine
@@ -444,7 +441,6 @@ class Unit(Component):
     def guiding(self) -> bool:
         return self.is_active(UnitActivities.Guiding)
 
-    @return_with_status
     def power_all_on(self):
         """
         Turn **ON** all power sockets
@@ -455,7 +451,6 @@ class Unit(Component):
             if isinstance(c, SwitchedPowerDevice):
                 c.power_on()
 
-    @return_with_status
     def power_all_off(self):
         """
         Turn **OFF** all power sockets
@@ -474,12 +469,12 @@ class Unit(Component):
         :mastapi:
         """
         ret = {
-            # 'power':
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
+            'detected': self.detected,
+            'connected': self.connected,
             'operational': self.operational,
             'why_not_operational': self.why_not_operational,
-            'connected': self.connected,
+            'activities': self.activities,
+            'activities_verbal': self.activities.__repr__(),
             'guiding': self.guiding,
             'autofocusing': self.is_autofocusing,
             'busy': self.is_autofocusing or self.is_guiding,
@@ -488,8 +483,8 @@ class Unit(Component):
             'stage': self.stage.status(),
             'covers': self.covers.status(),
             'focuser': self.focuser.status(),
-            'time_stamp': datetime.datetime.now().isoformat()
         }
+        time_stamp(ret)
 
         if self.autofocus_result:
             ret['autofocus'] = {}
@@ -585,12 +580,12 @@ class Unit(Component):
         header['RA'] = f"{Angle(ra * u.deg).value}"
         header['DEC'] = f"{Angle(dec * u.deg).value}"
         hdu = fits.PrimaryHDU(data=image, header=header)
-        hdul = fits.HDUList([hdu])
+        hdu_list = fits.HDUList([hdu])
 
-        # fits_file = tempfile.TemporaryFile(prefix='platesolve-', suffix='.fits')
+        # fits_file = temp_file.TemporaryFile(prefix='platesolve-', suffix='.fits')
         fits_file = 'c:/Temp/xxx.fits'
         try:
-            hdul.writeto(fits_file, overwrite=True)
+            hdu_list.writeto(fits_file, overwrite=True)
             self.logger.info(f"wrote file '{fits_file}'")
         except Exception as ex:
             self.logger.error(f"failed to write to '{fits_file}'", exc_info=ex)
@@ -647,9 +642,7 @@ class Unit(Component):
             self.shm.unlink()
             self.shm = None
 
-        self.camera.ascom.Connected = False
-        self.mount.ascom.Connected = False
-        self.focuser.ascom.Connected = False
+        self.shutdown()
 
     def start_lifespan(self):
         self.logger.debug('unit start lifespan')
@@ -657,9 +650,12 @@ class Unit(Component):
                                   cmd='C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Interface 4/PWI4.exe',
                                   logger=self.logger)
         ensure_process_is_running(pattern='PWShutter',
-                                  cmd="C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Shutter Control/PWShutter.exe",
+                                  cmd="C:/Program Files (x86)/PlaneWave Instruments/" +
+                                      "PlaneWave Shutter Control/PWShutter.exe",
                                   logger=self.logger,
                                   shell=True)
+
+        self.startup()
 
     @property
     def operational(self) -> bool:
@@ -667,12 +663,12 @@ class Unit(Component):
 
     @property
     def why_not_operational(self) -> List[str]:
-        ret = []
-        for c in self.components:
-            for reason in c.why_not_operational:
-                ret.append(reason)
-        return ret
+        return list(chain.from_iterable(c.why_not_operational for c in self.components))
 
     @property
     def name(self) -> str:
         return 'unit'
+
+    @property
+    def detected(self) -> bool:
+        return all([comp.detected for comp in self.components])
