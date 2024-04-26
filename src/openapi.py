@@ -1,12 +1,15 @@
 import inspect
+import socket
+
 from fastapi.openapi.utils import get_openapi
 
 import stage
+import focuser
 from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
-from utils import Subsystem
+from common.utils import Subsystem, BASE_UNIT_PATH
 from typing import Union
-from powered_device import Socket, SocketId
+import os
 
 
 class TypeToSchema:
@@ -26,10 +29,10 @@ def make_parameters(method_name, method, docstring) -> list:
         TypeToSchema(str, {'type': 'string'}),
         TypeToSchema(Union[int, str], {'type': 'number', 'format': 'int32'}),
         TypeToSchema(Union[float, str], {'type': 'number', 'format': 'float'}),
-        TypeToSchema(Union[stage.PresetPosition, str], {'type': 'string', 'enum':
-            ['Image', 'Spectra', 'Min', 'Max', 'Middle']}),
+        TypeToSchema(Union[stage.PresetPosition, str], {'type': 'string',
+                                                        'enum': ['Image', 'Spectra', 'Min', 'Max', 'Middle']}),
         TypeToSchema(Union[stage.StageDirection, str], {'type': 'string', 'enum': ['Up', 'Down']}),
-        TypeToSchema(Union[SocketId, str], {'type': 'string', 'enum': Socket.names()}),
+        TypeToSchema(Union[focuser.FocusDirection, str], {'type': 'string', 'enum': ['In', 'Out']}),
     ]
 
     parameters_list = list()
@@ -49,7 +52,8 @@ def make_parameters(method_name, method, docstring) -> list:
 
         found = [x for x in types_to_schemas if x.t == param_type]
         if len(found) == 0:
-            print(f'make_parameters: MISSING method: {method_name}, parameter type {param_type} for param: {param_name}')
+            print(f"make_parameters: MISSING method: '{method_name}', " +
+                  f"parameter type '{param_type}' for param: '{param_name}'")
         param_dict['schema'] = found[0].schema if not len(found) == 0 else None
         parameters_list.append(param_dict)
 
@@ -61,12 +65,12 @@ def make_openapi_schema(app, subsystems: list[Subsystem]):
     openapi_schema = get_openapi(
         title="Welcome to the mistery show!",
         version="1.0",
-        description="This page allows you to explore the MAST Api",
+        description="This page allows you to explore the MAST Unit Api",
         routes=app.routes,
     )
 
     openapi_schema['servers'] = [{
-        'url': 'http://127.0.0.1:8000/mast/api/v1'
+        'url': f'http://{socket.gethostname()}:8000'
     }]
 
     openapi_schema['paths'] = dict()
@@ -75,7 +79,11 @@ def make_openapi_schema(app, subsystems: list[Subsystem]):
         for tup in tuples:
             method_name = tup[0]
             method = tup[1]
-            path = f'/{sub.path}/{method_name}'
+            if sub.path == 'unit':
+                top = os.path.dirname(BASE_UNIT_PATH)
+            else:
+                top = BASE_UNIT_PATH
+            path = f'{top}/{sub.path}/{method_name}'
             if (sub.path == 'planewave' and method_name == 'status' or
                     method_name.startswith('mount_') or
                     method_name.startswith('focuser_') or
