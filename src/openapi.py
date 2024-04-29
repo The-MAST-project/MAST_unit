@@ -4,9 +4,8 @@ from fastapi.openapi.utils import get_openapi
 import stage
 from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
-from utils import Subsystem
+from common.utils import Subsystem
 from typing import Union
-from powered_device import Socket, SocketId
 
 
 class TypeToSchema:
@@ -29,7 +28,6 @@ def make_parameters(method_name, method, docstring) -> list:
         TypeToSchema(Union[stage.PresetPosition, str], {'type': 'string', 'enum':
             ['Image', 'Spectra', 'Min', 'Max', 'Middle']}),
         TypeToSchema(Union[stage.StageDirection, str], {'type': 'string', 'enum': ['Up', 'Down']}),
-        TypeToSchema(Union[SocketId, str], {'type': 'string', 'enum': Socket.names()}),
     ]
 
     parameters_list = list()
