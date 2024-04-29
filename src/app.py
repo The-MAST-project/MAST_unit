@@ -1,5 +1,8 @@
+import socket
+
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from PlaneWave import pwi4_client
 from unit import Unit
 from common.utils import init_log, HelpResponse, quote, Subsystem
@@ -12,10 +15,25 @@ import psutil
 import os
 from fastapi.responses import RedirectResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
+from common.utils import BASE_UNIT_PATH, CanonicalResponse
+from common.config import Config
 
-unit_id = 17
-logger = logging.Logger('mast')
+logger = logging.Logger('mast-unit')
 init_log(logger)
+
+unit_id: int | None = None
+mast_unit_env: str | None = None
+hostname = socket.gethostname()
+if hostname.startswith('mast'):
+    try:
+        unit_id = int(hostname[4:])
+    except ValueError:
+        try:
+            mast_unit_env = os.getenv('MAST_UNIT')
+            unit_id = int(mast_unit_env)
+        except ValueError:
+            logger.error(f"Cannot figure out the MAST unit_id ({hostname=}, {mast_unit_env=}")
+
 unit = None
 pw = None
 
@@ -56,10 +74,16 @@ app = FastAPI(
     redocs_url=None,
     lifespan=lifespan,
     openapi_url='/openapi.json',
+    debug=True,
     default_response_class=ORJSONResponse)
 
-root = '/mast/api/v1/'
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -111,7 +135,7 @@ make_openapi_schema(app=app, subsystems=subsystems)
 get_api_methods(subs=subsystems)
 
 
-@app.get(root + '{subsystem}/{method}')
+@app.get(BASE_UNIT_PATH + '/{subsystem}/{method}')
 async def do_item(subsystem: str, method: str, request: Request):
 
     sub = [s for s in subsystems if s.path == subsystem]
@@ -130,7 +154,8 @@ async def do_item(subsystem: str, method: str, request: Request):
         return responses
 
     if method not in sub.method_names:
-        return f'Invalid method \'{method}\' for subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}'
+        return CanonicalResponse(error=f"Invalid method '{method}' for " +
+                                       f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
 
     cmd = f'{sub.obj_name}.{method}('
     for k, v in request.query_params.items():
@@ -139,11 +164,48 @@ async def do_item(subsystem: str, method: str, request: Request):
 
     try:
         ret = eval(cmd)
+        ret = CanonicalResponse(value=ret)
     except Exception as e:
-        return f'app.do_item: Command: {cmd} => Exception: {type(e).__name__} - {e}'
+        ret = CanonicalResponse(exception=e)
+
+    return ret
+
+
+@app.get(BASE_UNIT_PATH + '/{method}')
+def do_unit(method: str, request: Request):
+    sub = [s for s in subsystems if s.obj_name == 'unit']
+    sub = sub[0]
+    if method == 'quit':
+        app_quit()
+
+    if method == 'help':
+        responses = list()
+        for i, obj in enumerate(sub.method_objects):
+            responses.append(HelpResponse(sub.method_names[i], sub.method_docs[i]))
+        return responses
+
+    if method not in sub.method_names:
+        return f'Invalid method \'{method}\' for subsystem {sub.obj_name}, valid ones: {", ".join(sub.method_names)}'
+
+    cmd = f'{sub.obj_name}.{method}('
+    for k, v in request.query_params.items():
+        cmd += f"{k}={quote(v)}, "
+    cmd = cmd.removesuffix(', ') + ')'
+
+    try:
+        ret = eval(cmd)
+        ret = {
+            'Value': ret,
+        }
+    except Exception as e:
+        ret = {
+            'Exception': f"{e}",
+        }
 
     return ret
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    conf = Config().toml['server']
+    port = conf['port'] if 'port' in conf else 8000
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")

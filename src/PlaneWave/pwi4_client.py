@@ -719,7 +719,7 @@ class PWI4HttpCommunicator:
 
             try:
                 error_details = e.read()  # Try to read the payload of the response for error information
-                error_message = error_message + ": " + error_details
+                error_message = error_message + ": " + str(error_details)
             except:
                 pass # If that failed, we won't include any further details
             
