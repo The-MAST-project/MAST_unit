@@ -57,7 +57,7 @@ def make_parameters(method_name, method, docstring) -> list:
         found = [x for x in types_to_schemas if x.t == param_type]
         if len(found) == 0:
             logger.error(f"make_parameters: MISSING " +
-                         f"'{param_type=}' for '{param_name=}' ({method_name=})")
+                         f"{param_type=} for {param_name=} ({method_name=})")
         else:
             param_dict['schema'] = found[0].schema if not len(found) == 0 else None
             parameters_list.append(param_dict)
