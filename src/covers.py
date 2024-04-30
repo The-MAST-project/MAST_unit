@@ -70,7 +70,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.timer.start()
 
         self._connected: bool = False
-        self._shut_down = False
+        self._has_been_shut_down = False
 
         self._logger.info('initialized')
 
@@ -179,7 +179,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
         :mastapi:
         """
-        self._shut_down = False
+        self._has_been_shut_down = False
         if not self.is_on():
             self.power_on()
         if not self.connected:
@@ -234,7 +234,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.end_activity(CoverActivities.Closing)
             if self.is_active(CoverActivities.ShuttingDown):
                 self.end_activity(CoverActivities.ShuttingDown)
-                self._shut_down = True
+                self._has_been_shut_down = True
                 self.power_off()
 
     @property
@@ -243,13 +243,15 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def operational(self) -> bool:
-        return self.is_on() and self.ascom and self.connected and self.state == CoversState.Open
+        return all([self.is_on(), self.detected, self.ascom, self.connected, self.state == CoversState.Open])
 
     @property
     def why_not_operational(self) -> List[str]:
         ret = []
         if not self.is_on():
             ret.append(f"{self.name}: not powered")
+        elif not self.detected:
+            ret.append(f"{self.name}: not detected")
         else:
             if not self.ascom:
                 ret.append(f"{self.name}: (ASCOM) - no handle")
@@ -268,5 +270,5 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     
     @property
     def shut_down(self) -> bool:
-        return self._shut_down
+        return self._has_been_shut_down
     

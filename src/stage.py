@@ -97,7 +97,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.max_travel: int | None = None
 
         self.info = {}
-        self._shut_down = False
+        self._has_been_shut_down = False
 
         if not self.is_on():
             self.power_on()
@@ -219,7 +219,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.power_on()
         if not self.connected:
             self.connect()
-        self._shut_down = False
+        self._has_been_shut_down = False
         if self.at_preset != 'Spectra':
             self.start_activity(StageActivities.StartingUp)
             self.move_to_preset(PresetPosition.Spectra)
@@ -233,7 +233,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         """
         self.disconnect()
         self.power_off()
-        self._shut_down = True
+        self._has_been_shut_down = True
         return CanonicalResponse.ok
 
     @property
@@ -327,7 +327,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         :mastapi:
         """
-        if not self.connected:
+        if not self.detected or not self.connected:
             return
 
         if isinstance(preset, str):
@@ -454,8 +454,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return (self.is_on() and self.device and self.connected and
-                (self.at_preset == 'Spectra' or self.at_preset == 'Image'))
+        return all([self.is_on(), self.device, self.connected, not self.shut_down,
+                (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -466,6 +466,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         else:
             if not self.device:
                 ret.append(f"{label}: not detected")
+            if self.shut_down:
+                ret.append(f"{label}: shut down")
             if not self.connected:
                 ret.append(f"{label}: not connected")
             elif not (self.at_preset == 'Spectra' or self.at_preset == 'Image'):
@@ -478,4 +480,4 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def shut_down(self) -> bool:
-        return self._shut_down
+        return self._has_been_shut_down

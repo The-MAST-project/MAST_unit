@@ -52,7 +52,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
             if 'known_as_good_position' in self.conf else None
         self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
 
-        self._shut_down = False
+        self._has_been_shut_down = False
         self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'focuser-timer-thread'
         self.timer.start()
@@ -68,7 +68,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if not self.connected:
             self.connect()
         self.pw.focuser_enable()
-        self._shut_down = False
+        self._has_been_shut_down = False
         if self.known_as_good_position is not None:
             self.goto(self.known_as_good_position)
         return CanonicalResponse.ok
@@ -82,7 +82,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         self.pw.focuser_disable()
         if self.is_on():
             self.power_off()
-        self._shut_down = True
+        self._has_been_shut_down = True
         return CanonicalResponse.ok
 
     def connect(self):
@@ -234,6 +234,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
             'lower_limit': self.lower_limit,
             'upper_limit': self.upper_limit,
             'position': self.position,
+            'known_as_good_position': self.known_as_good_position,
         }
         time_stamp(ret)
         return ret
@@ -245,19 +246,24 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
     @property
     def operational(self) -> bool:
         st = self.pw.status()
-        return (not self.shut_down) and self.is_on() and st.focuser.is_connected
+        return all([not self.shut_down, self.is_on(), st.focuser.exists, st.focuser.is_connected])
 
     @property
     def why_not_operational(self) -> List[str]:
         ret = []
-        if self.shut_down:
-            ret.append(f"shut down")
         if not self.is_on():
             ret.append(f"{self.name}: not powered")
         else:
-            st = self.pw.status()
-            if not st.focuser.is_connected:
-                ret.append(f"{self.name}: (PWI4) - not connected")
+            if self.shut_down:
+                ret.append(f"{self.name}: shut down")
+            if not self.detected:
+                ret.append(f"{self.name}: not detected")
+            else:
+                st = self.pw.status()
+                if not st.focuser.exists:
+                    ret.append(f"{self.name}: (PWI4) - does not exist")
+                elif not st.focuser.is_connected:
+                    ret.append(f"{self.name}: (PWI4) - not connected")
         return ret
 
     @property
@@ -267,4 +273,4 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def shut_down(self) -> bool:
-        return self._shut_down
+        return self._has_been_shut_down

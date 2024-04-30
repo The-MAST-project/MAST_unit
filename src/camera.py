@@ -105,7 +105,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.expected_mid_exposure: datetime.datetime | None = None
         self.ccd_temp_at_mid_exposure: float | None = None
         
-        self._shut_down: bool = False
+        self._has_been_shut_down: bool = False
 
         self.timer: RepeatTimer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'camera-timer-thread'
@@ -346,7 +346,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             else:
                 time.sleep(2)
         self.power_off()
-        self._shut_down = True
+        self._has_been_shut_down = True
         return CanonicalResponse(errors=self.errors) if self.errors else CanonicalResponse.ok
 
     def warmup(self):
@@ -487,22 +487,29 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def operational(self) -> bool:
-        if not all([self.switch.detected, self.is_on(), self._ascom, self._ascom.connected]):
-            return False
-        return True
+        response = ascom_run(self, 'CoolerOn')
+
+        return all([self.switch.detected, self.is_on(), self.detected, self._ascom,
+                    self._ascom.connected, response.succeeded, response.value])
 
     @property
     def why_not_operational(self) -> List[str]:
         label = f'{self.name}'
+        response = ascom_run(self, 'CoolerOn')
+
         ret = []
         if not self.switch.detected:
             ret.append(f"{label}: power switch '{self.switch.name}' (at '{self.switch.ipaddress}') not detected")
         elif not self.is_on():
-            ret.append(f"{label}: not powered ON")
+            ret.append(f"{label}: not powered")
+        elif not self.detected:
+            ret.append(f"{label}: not detected")
         elif not self._ascom:
             ret.append(f"{label}: (ASCOM) - no handle")
         elif not self._ascom.connected:
             ret.append(f"{label}: (ASCOM) - not connected")
+        elif not(response.succeeded and response.value):
+            ret.append(f"{label}: (ASCOM) - cooler not ON")
 
         return ret
 
@@ -516,5 +523,5 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def shut_down(self) -> bool:
-        return self._shut_down
+        return self._has_been_shut_down
     
