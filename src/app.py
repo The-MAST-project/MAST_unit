@@ -16,6 +16,7 @@ import os
 from fastapi.responses import RedirectResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 from common.utils import BASE_UNIT_PATH, CanonicalResponse
+from common.process import ensure_process_is_running
 from common.config import Config
 
 logger = logging.Logger('mast-unit')
@@ -47,6 +48,15 @@ def app_quit():
     parent.kill()
 
 
+ensure_process_is_running(pattern='PWI4',
+                          cmd='C:\\Program Files (x86)\\PlaneWave Instruments\\PlaneWave Interface 4\\PWI4.exe',
+                          logger=logger, shell=True)
+ensure_process_is_running(pattern='PWShutter',
+                          cmd="C:\\Program Files (x86)\\PlaneWave Instruments\\" +
+                              "PlaneWave Shutter Control\\PWShutter.exe",
+                          logger=logger,
+                          shell=True)
+
 try:
     pw = pwi4_client.PWI4()
     pw.status()
@@ -75,7 +85,8 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_url='/openapi.json',
     debug=True,
-    default_response_class=ORJSONResponse)
+    default_response_class=ORJSONResponse
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,8 +165,8 @@ async def do_item(subsystem: str, method: str, request: Request):
         return responses
 
     if method not in sub.method_names:
-        return CanonicalResponse(error=f"Invalid method '{method}' for " +
-                                       f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
+        return CanonicalResponse(errors=f"Invalid method '{method}' for " +
+                                        f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
 
     cmd = f'{sub.obj_name}.{method}('
     for k, v in request.query_params.items():

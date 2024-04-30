@@ -55,10 +55,12 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             cls._instance = super(Camera, cls).__new__(cls)
         return cls._instance
 
+    @property
     def logger(self) -> Logger:
         return self.switch_logger
 
-    def ascom(self) -> win32com.client.CDispatch:
+    @property
+    def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
     def __init__(self):
@@ -102,6 +104,8 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.errors: List[str] = []
         self.expected_mid_exposure: datetime.datetime | None = None
         self.ccd_temp_at_mid_exposure: float | None = None
+        
+        self._shut_down: bool = False
 
         self.timer: RepeatTimer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'camera-timer-thread'
@@ -206,7 +210,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             if response.is_exception:
                 self.errors.append(response.exception)
             if response.is_error:
-                self.errors.append(response.error)
+                self.errors.append(response.errors)
         return CanonicalResponse(errors=self.errors) if self.errors else CanonicalResponse.ok
 
     def abort_exposure(self):
@@ -264,6 +268,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             'operational': self.operational,
             'why_not_operational': self.why_not_operational,
             'connected': self.connected,
+            'shut_down': self.shut_down,
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
             'errors': self.errors,
@@ -341,6 +346,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             else:
                 time.sleep(2)
         self.power_off()
+        self._shut_down = True
         return CanonicalResponse(errors=self.errors) if self.errors else CanonicalResponse.ok
 
     def warmup(self):
@@ -507,3 +513,8 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def detected(self) -> bool:
         return self._detected
+
+    @property
+    def shut_down(self) -> bool:
+        return self._shut_down
+    

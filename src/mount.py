@@ -33,10 +33,12 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             cls._instance = super(Mount, cls).__new__(cls)
         return cls._instance
 
+    @property
     def logger(self) -> Logger:
         return self._logger
 
-    def ascom(self):
+    @property
+    def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
     def __init__(self):
@@ -48,6 +50,10 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         Component.__init__(self)
         NetworkedDevice.__init__(self, self.conf)
 
+        if not self.is_on():
+            self.power_on()
+
+        self._shut_down: bool = False
         self.last_axis0_position_degrees: int = -99999
         self.last_axis1_position_degrees: int = -99999
         self.default_guide_rate_degs_per_second = 0.002083  # degs/sec
@@ -141,6 +147,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         if not self.connected:
             self.connect()
         self.start_activity(MountActivities.StartingUp)
+        self._shut_down = False
         self.pw.request('/fans/on')
         self.find_home()
         return CanonicalResponse.ok
@@ -196,6 +203,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
                 self.end_activity(MountActivities.Parking)
                 if self.is_active(MountActivities.ShuttingDown):
                     self.end_activity(MountActivities.ShuttingDown)
+                    self._shut_down = True
                     self.power_off()
 
     def status(self) -> dict:
@@ -213,6 +221,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             'why_not_operational': self.why_not_operational,
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
+            'shut_down': self.shut_down,
             'errors': self.errors,
         }
 
@@ -315,3 +324,8 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
     def detected(self) -> bool:
         st = self.pw.status()
         return st.mount.is_connected
+
+    @property
+    def shut_down(self) -> bool:
+        return self._shut_down
+    

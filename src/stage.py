@@ -97,9 +97,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.max_travel: int | None = None
 
         self.info = {}
-        self.simulated: False
-        self.sim_connected: False
-        self.sim_delta_per_tick = 3000
+        self._shut_down = False
 
         if not self.is_on():
             self.power_on()
@@ -221,6 +219,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.power_on()
         if not self.connected:
             self.connect()
+        self._shut_down = False
         if self.at_preset != 'Spectra':
             self.start_activity(StageActivities.StartingUp)
             self.move_to_preset(PresetPosition.Spectra)
@@ -234,6 +233,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         """
         self.disconnect()
         self.power_off()
+        self._shut_down = True
         return CanonicalResponse.ok
 
     @property
@@ -283,6 +283,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
             'operational': self.operational,
+            'shut_down': self.shut_down,
             'why_not_operational': self.why_not_operational,
             'presets': presets,
             'position': self.position if self.connected else None,
@@ -355,7 +356,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 self.target = None
                 msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             self.target = None
             msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
@@ -390,7 +391,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {microns})'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {microns})'
             self.logger.exception(msg, ex)
@@ -424,7 +425,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {amount})'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {amount})'
             self.logger.exception(msg, ex)
@@ -474,3 +475,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     @property
     def detected(self) -> bool:
         return self.device is not None
+
+    @property
+    def shut_down(self) -> bool:
+        return self._shut_down
