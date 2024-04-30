@@ -646,15 +646,6 @@ class Unit(Component):
 
     def start_lifespan(self):
         self.logger.debug('unit start lifespan')
-        ensure_process_is_running(pattern='PWI4',
-                                  cmd='C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Interface 4/PWI4.exe',
-                                  logger=self.logger)
-        ensure_process_is_running(pattern='PWShutter',
-                                  cmd="C:/Program Files (x86)/PlaneWave Instruments/" +
-                                      "PlaneWave Shutter Control/PWShutter.exe",
-                                  logger=self.logger,
-                                  shell=True)
-
         self.startup()
 
     @property
