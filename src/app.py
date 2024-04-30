@@ -57,18 +57,22 @@ ensure_process_is_running(pattern='PWShutter',
                           logger=logger,
                           shell=True)
 
-try:
-    pw = pwi4_client.PWI4()
-    pw.status()
-    unit = Unit(unit_id)
-except pwi4_client.PWException as ex:
-    logger.error(f'No PWI4: {ex}')
-    app_quit()
-except Exception as ex:
-    logger.error('Could not create a Unit object', exc_info=ex)
+while True:
+    try:
+        pw = pwi4_client.PWI4()
+        pw.status()
+        logger.info(f"Connected to PWI4")
+        break
+    except pwi4_client.PWException as ex:
+        logger.info(f"no PWI4 yet ...")
+        continue
+    except Exception as ex:
+        logger.error("cannot connect to PWI4", exc_info=ex)
+        app_quit()
 
+unit = Unit(unit_id)
 if not unit:
-    logger.error('No unit')
+    logger.error("cannot create a Unit")
     app_quit()
 
 
