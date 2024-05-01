@@ -209,13 +209,9 @@ def do_unit(method: str, request: Request):
 
     try:
         ret = eval(cmd)
-        ret = {
-            'Value': ret,
-        }
+        ret = CanonicalResponse(value=ret)
     except Exception as e:
-        ret = {
-            'Exception': f"{e}",
-        }
+        ret = CanonicalResponse(exception=e)
 
     return ret
 
