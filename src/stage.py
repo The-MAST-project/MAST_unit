@@ -141,13 +141,14 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                         self.min_travel,
                         self.max_travel,
                     )
-                ximclib.close_device(byref(cast(dev, POINTER(c_int))))
+                # ximclib.close_device(byref(cast(dev, POINTER(c_int))))
+                self.device = dev
                 self.stage_lock = threading.Lock()
 
         image_position = self.conf['ImagePosition']
         spectra_position = self.conf['SpectraPosition']
 
-        if dev_count > 0:
+        if self.device is not None:
             self.presets = {
                 PresetPosition.Min: self.min_travel,
                 PresetPosition.Max: self.max_travel,
@@ -155,6 +156,14 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 PresetPosition.Image: image_position,
                 PresetPosition.Spectra: spectra_position,
             }
+
+            # get initial values from the hardware
+            hw_status = status_t()
+            with self.stage_lock:
+                result = ximclib.get_status(self.device, byref(hw_status))
+            if result == Result.Ok:
+                self._position = hw_status.CurPosition
+                self.is_moving = hw_status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
             self.timer = RepeatTimer(2, function=self.ontimer)
             self.timer.name = 'stage-timer-thread'
@@ -241,7 +250,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         current_position = self.position
         if current_position is not None:
             for preset, pos in self.presets.items():
-                if self.close_enough(current_position, pos):
+                if self.close_enough(pos):
                     return preset.name
         return None
 
@@ -254,7 +263,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         if not self.connected:
             raise Exception('Not connected')
 
-        if Stage.close_enough(self.position, value):
+        if self.close_enough(value):
             self.logger.info(f'Not changing position ({self.position} is close enough to {value}')
             return
 
@@ -292,9 +301,10 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         time_stamp(ret)
         return ret
 
-    @staticmethod
-    def close_enough(position, target):
-        return abs(position - target) <= 2
+    def close_enough(self, target):
+        if self._position is None or target is None:
+            print(f"close_enough: {self._position=}, {target=}")
+        return abs(self._position - target) <= 2
 
     def ontimer(self):
         if not self.connected:
@@ -308,11 +318,11 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.is_moving = hw_status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
 
         if not self.is_moving:
-            if self.is_active(StageActivities.Moving) and Stage.close_enough(self.position, self.target):
+            if self.is_active(StageActivities.Moving) and self.close_enough(self.target):
                 self.end_activity(StageActivities.Moving)
 
             if (self.is_active(StageActivities.StartingUp) and
-                    Stage.close_enough(self.position, self.presets[PresetPosition.Spectra])):
+                    self.close_enough(self.presets[PresetPosition.Spectra])):
                 self.end_activity(StageActivities.StartingUp)
 
     #
@@ -338,7 +348,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 return
 
         preset_position = self.presets[preset]
-        if Stage.close_enough(self.position, preset_position):
+        if self.close_enough(preset_position):
             self.logger.info(f'Not moving (current position:{self.position}) close enough to {preset_position})')
             return
 
@@ -455,7 +465,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     @property
     def operational(self) -> bool:
         return all([self.is_on(), self.device, self.connected, not self.shut_down,
-                (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
+                    (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
 
     @property
     def why_not_operational(self) -> List[str]:
