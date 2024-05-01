@@ -12,7 +12,7 @@ from covers import Covers, CoverActivities
 from stage import Stage, StageActivities
 from mount import Mount, MountActivities
 from focuser import Focuser, FocuserActivities
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, PowerSwitchFactory
 from astropy.io import fits
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -21,7 +21,7 @@ from common.utils import RepeatTimer
 from enum import IntFlag, auto
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from common.utils import init_log, Component, path_maker
+from common.utils import init_log, Component, DailyFileHandler
 from common.utils import time_stamp, CanonicalResponse
 from common.process import find_process
 import os
@@ -91,11 +91,15 @@ class Unit(Component):
         self.logger: logging.Logger = logging.getLogger('mast.unit')
         init_log(self.logger)
 
+        file_handler = [h for h in self.logger.handlers if isinstance(h, DailyFileHandler)]
+        self.logger.info(f"logging to '{file_handler[0].path}'")
+
         if not 1 <= unit_id <= Unit.MAX_UNITS:
             raise f"Bad unit id '{unit_id}', must be in [1..{Unit.MAX_UNITS}]"
 
         self.id = unit_id
         try:
+            self.power_switch = PowerSwitchFactory.get_instance('1')
             self.mount: Mount = Mount()
             self.camera: Camera = Camera()
             self.covers: Covers = Covers()
@@ -107,6 +111,7 @@ class Unit(Component):
             raise ex
 
         self.components: List[Component] = [
+            self.power_switch,
             self.mount,
             self.camera,
             self.covers,
@@ -120,9 +125,6 @@ class Unit(Component):
 
         self.shm = None
         self.autofocus_result: AutofocusResult | None = None
-        log_filename = os.path.join(path_maker.make_daily_folder_name(), 'log.txt')
-        self.logger.info('initialized')
-        self.logger.info(f'logging to {log_filename}')
         
         self._has_been_shut_down = False
 
@@ -483,12 +485,9 @@ class Unit(Component):
             'activities_verbal': self.activities.__repr__(),
             'guiding': self.guiding,
             'autofocusing': self.is_autofocusing,
-            'mount': self.mount.status(),
-            'camera': self.camera.status(),
-            'stage': self.stage.status(),
-            'covers': self.covers.status(),
-            'focuser': self.focuser.status(),
         }
+        for comp in self.components:
+            ret[comp.name] = comp.status()
         time_stamp(ret)
 
         if self.autofocus_result:
