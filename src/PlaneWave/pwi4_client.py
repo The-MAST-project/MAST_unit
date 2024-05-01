@@ -647,7 +647,7 @@ class PWI4HttpCommunicator:
         self.host = host
         self.port = port
 
-        self.timeout_seconds = 3
+        self.timeout_seconds = 10
 
     def make_url(self, path, **kwargs):
         """

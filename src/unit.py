@@ -21,8 +21,9 @@ from common.utils import RepeatTimer
 from enum import IntFlag, auto
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from common.utils import ensure_process_is_running, init_log, Component, path_maker
-from common.utils import find_process, time_stamp, CanonicalResponse
+from common.utils import init_log, Component, path_maker
+from common.utils import time_stamp, CanonicalResponse
+from common.process import find_process
 import os
 import subprocess
 from enum import Enum
@@ -122,6 +123,8 @@ class Unit(Component):
         log_filename = os.path.join(path_maker.make_daily_folder_name(), 'log.txt')
         self.logger.info('initialized')
         self.logger.info(f'logging to {log_filename}')
+        
+        self._has_been_shut_down = False
 
     def do_startup(self):
         self.start_activity(UnitActivities.StartingUp)
@@ -139,12 +142,14 @@ class Unit(Component):
         if self.is_active(UnitActivities.StartingUp):
             return
 
+        self._has_been_shut_down = False
         Thread(name='startup-thread', target=self.do_startup).start()
         return CanonicalResponse.ok
 
     def do_shutdown(self):
         self.start_activity(UnitActivities.ShuttingDown)
         [comp.shutdown() for comp in self.components]
+        self._has_been_shut_down = True
 
     def shutdown(self):
         """
@@ -472,12 +477,12 @@ class Unit(Component):
             'detected': self.detected,
             'connected': self.connected,
             'operational': self.operational,
+            'shut_down': self.shut_down,
             'why_not_operational': self.why_not_operational,
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
             'guiding': self.guiding,
             'autofocusing': self.is_autofocusing,
-            'busy': self.is_autofocusing or self.is_guiding,
             'mount': self.mount.status(),
             'camera': self.camera.status(),
             'stage': self.stage.status(),
@@ -613,6 +618,7 @@ class Unit(Component):
                     self.covers.is_active(CoverActivities.ShuttingDown) or
                     self.mount.is_active(MountActivities.ShuttingDown)):
                 self.end_activity(UnitActivities.ShuttingDown)
+                self._has_been_shut_down = True
 
         if self.is_active(UnitActivities.Autofocusing):
             autofocus_status = self.pw.status().autofocus
@@ -646,15 +652,6 @@ class Unit(Component):
 
     def start_lifespan(self):
         self.logger.debug('unit start lifespan')
-        ensure_process_is_running(pattern='PWI4',
-                                  cmd='C:/Program Files (x86)/PlaneWave Instruments/PlaneWave Interface 4/PWI4.exe',
-                                  logger=self.logger)
-        ensure_process_is_running(pattern='PWShutter',
-                                  cmd="C:/Program Files (x86)/PlaneWave Instruments/" +
-                                      "PlaneWave Shutter Control/PWShutter.exe",
-                                  logger=self.logger,
-                                  shell=True)
-
         self.startup()
 
     @property
@@ -672,3 +669,7 @@ class Unit(Component):
     @property
     def detected(self) -> bool:
         return all([comp.detected for comp in self.components])
+
+    @property
+    def shut_down(self) -> bool:
+        return self._has_been_shut_down

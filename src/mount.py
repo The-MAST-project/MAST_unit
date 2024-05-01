@@ -33,10 +33,12 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             cls._instance = super(Mount, cls).__new__(cls)
         return cls._instance
 
+    @property
     def logger(self) -> Logger:
         return self._logger
 
-    def ascom(self):
+    @property
+    def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
     def __init__(self):
@@ -48,6 +50,10 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         Component.__init__(self)
         NetworkedDevice.__init__(self, self.conf)
 
+        if not self.is_on():
+            self.power_on()
+
+        self._has_been_shut_down: bool = False
         self.last_axis0_position_degrees: int = -99999
         self.last_axis1_position_degrees: int = -99999
         self.default_guide_rate_degs_per_second = 0.002083  # degs/sec
@@ -136,11 +142,12 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         Performs the MAST startup routine (power ON, fans on and find home)
         :mastapi:
         """
-        if not self.is_on():
-            self.power_on()
+        if not self.detected:
+            return
         if not self.connected:
             self.connect()
         self.start_activity(MountActivities.StartingUp)
+        self._has_been_shut_down = False
         self.pw.request('/fans/on')
         self.find_home()
         return CanonicalResponse.ok
@@ -196,6 +203,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
                 self.end_activity(MountActivities.Parking)
                 if self.is_active(MountActivities.ShuttingDown):
                     self.end_activity(MountActivities.ShuttingDown)
+                    self._has_been_shut_down = True
                     self.power_off()
 
     def status(self) -> dict:
@@ -213,6 +221,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             'why_not_operational': self.why_not_operational,
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
+            'shut_down': self.shut_down,
             'errors': self.errors,
         }
 
@@ -281,7 +290,9 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
 
     @property
     def operational(self) -> bool:
-        return self.is_on() and self.connected
+        st = self.pw.status()
+        return all([self.is_on(), self.detected, self.connected, not self.shut_down, self.ascom, st.mount.is_connected,
+                    st.mount.axis0.is_enabled, st.mount.axis1.is_enabled])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -290,6 +301,10 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         ret = []
         if not self.is_on():
             ret.append(f"{label}: not powered")
+        elif not self.detected:
+            ret.append(f"{label}: not detected")
+        elif self.shut_down:
+            ret.append(f"{label}: shut down")
         else:
             if self.ascom:
                 response = ascom_run(self, 'Connected')
@@ -298,7 +313,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             else:
                 ret.append(f"{label}: (ASCOM) - no handle")
 
-            if st.mount.is_connected:
+            if not st.mount.is_connected:
                 ret.append(f"{label}: (PWI4) - not connected")
             else:
                 if not st.mount.axis0.is_enabled:
@@ -315,3 +330,8 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
     def detected(self) -> bool:
         st = self.pw.status()
         return st.mount.is_connected
+
+    @property
+    def shut_down(self) -> bool:
+        return self._has_been_shut_down
+    

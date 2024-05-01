@@ -97,9 +97,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.max_travel: int | None = None
 
         self.info = {}
-        self.simulated: False
-        self.sim_connected: False
-        self.sim_delta_per_tick = 3000
+        self._has_been_shut_down = False
 
         if not self.is_on():
             self.power_on()
@@ -221,6 +219,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.power_on()
         if not self.connected:
             self.connect()
+        self._has_been_shut_down = False
         if self.at_preset != 'Spectra':
             self.start_activity(StageActivities.StartingUp)
             self.move_to_preset(PresetPosition.Spectra)
@@ -234,6 +233,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         """
         self.disconnect()
         self.power_off()
+        self._has_been_shut_down = True
         return CanonicalResponse.ok
 
     @property
@@ -283,6 +283,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
             'operational': self.operational,
+            'shut_down': self.shut_down,
             'why_not_operational': self.why_not_operational,
             'presets': presets,
             'position': self.position if self.connected else None,
@@ -326,7 +327,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         :mastapi:
         """
-        if not self.connected:
+        if not self.detected or not self.connected:
             return
 
         if isinstance(preset, str):
@@ -355,7 +356,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 self.target = None
                 msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             self.target = None
             msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
@@ -390,7 +391,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {microns})'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {microns})'
             self.logger.exception(msg, ex)
@@ -424,7 +425,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {amount})'
                 self.logger.error(msg)
-                return CanonicalResponse(error=msg)
+                return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {amount})'
             self.logger.exception(msg, ex)
@@ -453,8 +454,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return (self.is_on() and self.device and self.connected and
-                (self.at_preset == 'Spectra' or self.at_preset == 'Image'))
+        return all([self.is_on(), self.device, self.connected, not self.shut_down,
+                (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -465,6 +466,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         else:
             if not self.device:
                 ret.append(f"{label}: not detected")
+            if self.shut_down:
+                ret.append(f"{label}: shut down")
             if not self.connected:
                 ret.append(f"{label}: not connected")
             elif not (self.at_preset == 'Spectra' or self.at_preset == 'Image'):
@@ -474,3 +477,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     @property
     def detected(self) -> bool:
         return self.device is not None
+
+    @property
+    def shut_down(self) -> bool:
+        return self._has_been_shut_down

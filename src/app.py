@@ -16,6 +16,7 @@ import os
 from fastapi.responses import RedirectResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 from common.utils import BASE_UNIT_PATH, CanonicalResponse
+from common.process import ensure_process_is_running
 from common.config import Config
 
 logger = logging.Logger('mast-unit')
@@ -47,18 +48,31 @@ def app_quit():
     parent.kill()
 
 
-try:
-    pw = pwi4_client.PWI4()
-    pw.status()
-    unit = Unit(unit_id)
-except pwi4_client.PWException as ex:
-    logger.error(f'No PWI4: {ex}')
-    app_quit()
-except Exception as ex:
-    logger.error('Could not create a Unit object', exc_info=ex)
+ensure_process_is_running(pattern='PWI4',
+                          cmd='C:\\Program Files (x86)\\PlaneWave Instruments\\PlaneWave Interface 4\\PWI4.exe',
+                          logger=logger, shell=True)
+ensure_process_is_running(pattern='PWShutter',
+                          cmd="C:\\Program Files (x86)\\PlaneWave Instruments\\" +
+                              "PlaneWave Shutter Control\\PWShutter.exe",
+                          logger=logger,
+                          shell=True)
 
+while True:
+    try:
+        pw = pwi4_client.PWI4()
+        pw.status()
+        logger.info(f"Connected to PWI4")
+        break
+    except pwi4_client.PWException as ex:
+        logger.info(f"no PWI4 yet ...")
+        continue
+    except Exception as ex:
+        logger.error("cannot connect to PWI4", exc_info=ex)
+        app_quit()
+
+unit = Unit(unit_id)
 if not unit:
-    logger.error('No unit')
+    logger.error("cannot create a Unit")
     app_quit()
 
 
@@ -75,7 +89,8 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_url='/openapi.json',
     debug=True,
-    default_response_class=ORJSONResponse)
+    default_response_class=ORJSONResponse
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,8 +169,8 @@ async def do_item(subsystem: str, method: str, request: Request):
         return responses
 
     if method not in sub.method_names:
-        return CanonicalResponse(error=f"Invalid method '{method}' for " +
-                                       f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
+        return CanonicalResponse(errors=f"Invalid method '{method}' for " +
+                                        f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
 
     cmd = f'{sub.obj_name}.{method}('
     for k, v in request.query_params.items():

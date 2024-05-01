@@ -4,8 +4,13 @@ from fastapi.openapi.utils import get_openapi
 import stage
 from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
-from common.utils import Subsystem
+from common.utils import Subsystem, BASE_UNIT_PATH, init_log
 from typing import Union
+import os
+import logging
+
+logger = logging.getLogger(name=f"openapi")
+init_log(logger)
 
 
 class TypeToSchema:
@@ -47,9 +52,11 @@ def make_parameters(method_name, method, docstring) -> list:
 
         found = [x for x in types_to_schemas if x.t == param_type]
         if len(found) == 0:
-            print(f'make_parameters: MISSING method: {method_name}, parameter type {param_type} for param: {param_name}')
-        param_dict['schema'] = found[0].schema if not len(found) == 0 else None
-        parameters_list.append(param_dict)
+            logger.error(f"make_parameters: MISSING " +
+                         f"{param_type=} for {param_name=} ({method_name=})")
+        else:
+            param_dict['schema'] = found[0].schema if not len(found) == 0 else None
+            parameters_list.append(param_dict)
 
     return parameters_list
 

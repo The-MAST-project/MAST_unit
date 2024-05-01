@@ -41,9 +41,11 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     Uses the PlaneWave ASCOM driver for the **MAST** mirror covers
     """
 
-    def ascom(self):
+    @property
+    def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
+    @property
     def logger(self) -> Logger:
         return self._logger
 
@@ -68,6 +70,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.timer.start()
 
         self._connected: bool = False
+        self._has_been_shut_down = False
 
         self._logger.info('initialized')
 
@@ -132,6 +135,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             'why_not_operational': self.why_not_operational,
             'activities': self.activities,
             'activities_verbal': self.activities.__repr__(),
+            'shut_down': self.shut_down,
             'state': self.state,
             'state_verbal': self.state.__repr__(),
         }
@@ -175,11 +179,12 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
         :mastapi:
         """
+        self._has_been_shut_down = False
         if not self.is_on():
             self.power_on()
         if not self.connected:
             self.connect()
-        if self.state != CoversState.Open:
+        if self.connected and self.state != CoversState.Open:
             self.start_activity(CoverActivities.StartingUp)
             self.open()
         return CanonicalResponse.ok
@@ -229,6 +234,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.end_activity(CoverActivities.Closing)
             if self.is_active(CoverActivities.ShuttingDown):
                 self.end_activity(CoverActivities.ShuttingDown)
+                self._has_been_shut_down = True
                 self.power_off()
 
     @property
@@ -237,13 +243,15 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def operational(self) -> bool:
-        return self.is_on() and self.ascom and self.connected and self.state == CoversState.Open
+        return all([self.is_on(), self.detected, self.ascom, self.connected, self.state == CoversState.Open])
 
     @property
     def why_not_operational(self) -> List[str]:
         ret = []
         if not self.is_on():
             ret.append(f"{self.name}: not powered")
+        elif not self.detected:
+            ret.append(f"{self.name}: not detected")
         else:
             if not self.ascom:
                 ret.append(f"{self.name}: (ASCOM) - no handle")
@@ -259,3 +267,8 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def detected(self) -> bool:
         return self.connected
+    
+    @property
+    def shut_down(self) -> bool:
+        return self._has_been_shut_down
+    
