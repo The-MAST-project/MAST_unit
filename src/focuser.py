@@ -221,15 +221,8 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
         """
         stat = self.pw.status()
-        ret = {
-            'powered': self.is_on(),
-            'detected': self.detected,
-            'connected': stat.focuser.is_connected,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
-            'shut_down': self.shut_down,
-            'operational': self.operational,
-            'why_not_operational': self.why_not_operational,
+        ret = self.power_status() | self.component_status()
+        ret |= {
             'moving': stat.focuser.is_moving,
             'lower_limit': self.lower_limit,
             'upper_limit': self.upper_limit,
@@ -246,7 +239,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
     @property
     def operational(self) -> bool:
         st = self.pw.status()
-        return all([not self.shut_down, self.is_on(), st.focuser.exists, st.focuser.is_connected])
+        return all([not self.was_shut_down, self.is_on(), st.focuser.exists, st.focuser.is_connected])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -254,7 +247,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if not self.is_on():
             ret.append(f"{self.name}: not powered")
         else:
-            if self.shut_down:
+            if self.was_shut_down:
                 ret.append(f"{self.name}: shut down")
             if not self.detected:
                 ret.append(f"{self.name}: not detected")
@@ -272,5 +265,5 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         return st.focuser.exists
 
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down

@@ -261,16 +261,8 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         -------
 
         """
-        ret = {
-            'powered':  self.is_on(),
-            'detected': self.detected,
-            'ascom':    ascom_driver_info(self._ascom),
-            'operational': self.operational,
-            'why_not_operational': self.why_not_operational,
-            'connected': self.connected,
-            'shut_down': self.shut_down,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
+        ret = self.power_status() | self.ascom_status() | self.component_status()
+        ret |= {
             'errors': self.errors,
         }
         if self.connected:
@@ -522,6 +514,6 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         return self._detected
 
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down
     

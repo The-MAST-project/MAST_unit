@@ -211,17 +211,8 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         Returns the ``mount`` subsystem status
         :mastapi:
         """
-        ret = {
-            'powered': self.switch.detected and self.is_on(),
-            'detected': self.detected,
-            'address': self.conf['network']['address'],
-            'ascom': ascom_driver_info(self.ascom),
-            'connected': self.connected,
-            'operational': self.operational,
-            'why_not_operational': self.why_not_operational,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
-            'shut_down': self.shut_down,
+        ret = self.power_status() | self.ascom_status() | self.component_status()
+        ret |= {
             'errors': self.errors,
         }
 
@@ -291,7 +282,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
     @property
     def operational(self) -> bool:
         st = self.pw.status()
-        return all([self.is_on(), self.detected, self.connected, not self.shut_down, self.ascom, st.mount.is_connected,
+        return all([self.is_on(), self.detected, self.connected, not self.was_shut_down, self.ascom, st.mount.is_connected,
                     st.mount.axis0.is_enabled, st.mount.axis1.is_enabled])
 
     @property
@@ -303,7 +294,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
             ret.append(f"{label}: not powered")
         elif not self.detected:
             ret.append(f"{label}: not detected")
-        elif self.shut_down:
+        elif self.was_shut_down:
             ret.append(f"{label}: shut down")
         else:
             if self.ascom:
@@ -332,6 +323,6 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         return st.mount.is_connected
 
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down
     

@@ -126,16 +126,8 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         """
         :mastapi:
         """
-        ret = {
-            'powered': self.is_on(),
-            'detected': self.detected,
-            'ascom': ascom_driver_info(self.ascom),
-            'connected': self.connected,
-            'operational': self.operational,
-            'why_not_operational': self.why_not_operational,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
-            'shut_down': self.shut_down,
+        ret = self.power_status() | self.ascom_status() | self.component_status()
+        ret |= {
             'state': self.state,
             'state_verbal': self.state.__repr__(),
         }
@@ -269,6 +261,6 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         return self.connected
     
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down
     

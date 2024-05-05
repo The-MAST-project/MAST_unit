@@ -280,20 +280,13 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         Returns the status of the MAST stage
         :mastapi:
         """
+        ret = self.power_status() | self.component_status()
         presets = {}
         if self.detected:
             for k, v in self.presets.items():
                 presets[k.name] = v
         ret = {
-            'powered': self.is_on(),
-            'detected': self.detected,
             'info': self.info,
-            'connected': self.connected,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
-            'operational': self.operational,
-            'shut_down': self.shut_down,
-            'why_not_operational': self.why_not_operational,
             'presets': presets,
             'position': self.position if self.connected else None,
             'at_preset': self.at_preset,
@@ -464,7 +457,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return all([self.is_on(), self.device, self.connected, not self.shut_down,
+        return all([self.is_on(), self.device, self.connected, not self.was_shut_down,
                     (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
 
     @property
@@ -476,7 +469,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         else:
             if not self.device:
                 ret.append(f"{label}: not detected")
-            if self.shut_down:
+            if self.was_shut_down:
                 ret.append(f"{label}: shut down")
             if not self.connected:
                 ret.append(f"{label}: not connected")
@@ -489,5 +482,5 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         return self.device is not None
 
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down

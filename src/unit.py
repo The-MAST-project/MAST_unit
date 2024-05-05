@@ -475,14 +475,8 @@ class Unit(Component):
         UnitStatus
         :mastapi:
         """
-        ret = {
-            'detected': self.detected,
-            'connected': self.connected,
-            'operational': self.operational,
-            'shut_down': self.shut_down,
-            'why_not_operational': self.why_not_operational,
-            'activities': self.activities,
-            'activities_verbal': self.activities.__repr__(),
+        ret = self.component_status()
+        ret |= {
             'guiding': self.guiding,
             'autofocusing': self.is_autofocusing,
         }
@@ -670,5 +664,5 @@ class Unit(Component):
         return all([comp.detected for comp in self.components])
 
     @property
-    def shut_down(self) -> bool:
+    def was_shut_down(self) -> bool:
         return self._has_been_shut_down
