@@ -11,7 +11,7 @@ from enum import IntFlag, Enum, auto
 from threading import Thread
 
 from common.utils import RepeatTimer, init_log, time_stamp
-from common.ascom import ascom_driver_info, ascom_run, AscomDispatcher
+from common.ascom import ascom_run, AscomDispatcher
 from common.utils import path_maker, image_to_fits, Component, CanonicalResponse
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
@@ -500,7 +500,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             ret.append(f"{label}: (ASCOM) - no handle")
         elif not self._ascom.connected:
             ret.append(f"{label}: (ASCOM) - not connected")
-        elif not(response.succeeded and response.value):
+        elif not (response.succeeded and response.value):
             ret.append(f"{label}: (ASCOM) - cooler not ON")
 
         return ret
