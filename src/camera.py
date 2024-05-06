@@ -105,7 +105,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.expected_mid_exposure: datetime.datetime | None = None
         self.ccd_temp_at_mid_exposure: float | None = None
         
-        self._has_been_shut_down: bool = False
+        self._was_shut_down: bool = False
 
         self.timer: RepeatTimer = RepeatTimer(1, function=self.ontimer)
         self.timer.name = 'camera-timer-thread'
@@ -338,7 +338,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             else:
                 time.sleep(2)
         self.power_off()
-        self._has_been_shut_down = True
+        self._was_shut_down = True
         return CanonicalResponse(errors=self.errors) if self.errors else CanonicalResponse.ok
 
     def warmup(self):
@@ -515,5 +515,5 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down
     

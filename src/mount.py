@@ -53,7 +53,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         if not self.is_on():
             self.power_on()
 
-        self._has_been_shut_down: bool = False
+        self._was_shut_down: bool = False
         self.last_axis0_position_degrees: int = -99999
         self.last_axis1_position_degrees: int = -99999
         self.default_guide_rate_degs_per_second = 0.002083  # degs/sec
@@ -147,7 +147,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
         if not self.connected:
             self.connect()
         self.start_activity(MountActivities.StartingUp)
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         self.pw.request('/fans/on')
         self.find_home()
         return CanonicalResponse.ok
@@ -203,7 +203,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
                 self.end_activity(MountActivities.Parking)
                 if self.is_active(MountActivities.ShuttingDown):
                     self.end_activity(MountActivities.ShuttingDown)
-                    self._has_been_shut_down = True
+                    self._was_shut_down = True
                     self.power_off()
 
     def status(self) -> dict:
@@ -324,5 +324,5 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
 
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down
     

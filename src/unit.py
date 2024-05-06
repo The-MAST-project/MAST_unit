@@ -126,7 +126,7 @@ class Unit(Component):
         self.shm = None
         self.autofocus_result: AutofocusResult | None = None
         
-        self._has_been_shut_down = False
+        self._was_shut_down = False
 
     def do_startup(self):
         self.start_activity(UnitActivities.StartingUp)
@@ -144,14 +144,14 @@ class Unit(Component):
         if self.is_active(UnitActivities.StartingUp):
             return
 
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         Thread(name='startup-thread', target=self.do_startup).start()
         return CanonicalResponse.ok
 
     def do_shutdown(self):
         self.start_activity(UnitActivities.ShuttingDown)
         [comp.shutdown() for comp in self.components]
-        self._has_been_shut_down = True
+        self._was_shut_down = True
 
     def shutdown(self):
         """
@@ -611,7 +611,7 @@ class Unit(Component):
                     self.covers.is_active(CoverActivities.ShuttingDown) or
                     self.mount.is_active(MountActivities.ShuttingDown)):
                 self.end_activity(UnitActivities.ShuttingDown)
-                self._has_been_shut_down = True
+                self._was_shut_down = True
 
         if self.is_active(UnitActivities.Autofocusing):
             autofocus_status = self.pw.status().autofocus
@@ -665,4 +665,4 @@ class Unit(Component):
 
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down

@@ -97,7 +97,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.max_travel: int | None = None
 
         self.info = {}
-        self._has_been_shut_down = False
+        self._was_shut_down = False
 
         if not self.is_on():
             self.power_on()
@@ -228,7 +228,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.power_on()
         if not self.connected:
             self.connect()
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         if self.at_preset != 'Spectra':
             self.start_activity(StageActivities.StartingUp)
             self.move_to_preset(PresetPosition.Spectra)
@@ -242,7 +242,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         """
         self.disconnect()
         self.power_off()
-        self._has_been_shut_down = True
+        self._was_shut_down = True
         return CanonicalResponse.ok
 
     @property
@@ -483,4 +483,4 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down

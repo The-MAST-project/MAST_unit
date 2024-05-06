@@ -52,7 +52,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
             if 'known_as_good_position' in self.conf else None
         self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
 
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'focuser-timer-thread'
         self.timer.start()
@@ -68,7 +68,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if not self.connected:
             self.connect()
         self.pw.focuser_enable()
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         if self.known_as_good_position is not None:
             self.goto(self.known_as_good_position)
         return CanonicalResponse.ok
@@ -82,7 +82,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         self.pw.focuser_disable()
         if self.is_on():
             self.power_off()
-        self._has_been_shut_down = True
+        self._was_shut_down = True
         return CanonicalResponse.ok
 
     def connect(self):
@@ -266,4 +266,4 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down

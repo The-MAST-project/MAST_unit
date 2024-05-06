@@ -70,7 +70,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.timer.start()
 
         self._connected: bool = False
-        self._has_been_shut_down = False
+        self._was_shut_down = False
 
         self._logger.info('initialized')
 
@@ -171,7 +171,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
         :mastapi:
         """
-        self._has_been_shut_down = False
+        self._was_shut_down = False
         if not self.is_on():
             self.power_on()
         if not self.connected:
@@ -226,7 +226,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.end_activity(CoverActivities.Closing)
             if self.is_active(CoverActivities.ShuttingDown):
                 self.end_activity(CoverActivities.ShuttingDown)
-                self._has_been_shut_down = True
+                self._was_shut_down = True
                 self.power_off()
 
     @property
@@ -262,5 +262,5 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     
     @property
     def was_shut_down(self) -> bool:
-        return self._has_been_shut_down
+        return self._was_shut_down
     
