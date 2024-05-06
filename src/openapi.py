@@ -6,8 +6,8 @@ from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
 from common.utils import Subsystem, BASE_UNIT_PATH, init_log
 from typing import Union
-import os
 import logging
+import socket
 
 logger = logging.getLogger(name=f"openapi")
 init_log(logger)
@@ -62,13 +62,25 @@ def make_openapi_schema(app, subsystems: list[Subsystem]):
     openapi_schema = get_openapi(
         title="Welcome to the mistery show!",
         version="1.0",
-        description="This page allows you to explore the MAST Api",
+        description="This page allows you to explore the MAST Unit Api",
         routes=app.routes,
     )
 
-    openapi_schema['servers'] = [{
-        'url': 'http://127.0.0.1:8000/mast/api/v1'
-    }]
+    #
+    # Set the openapi list of 'servers'.  The minimal list has the external IP address of the server,
+    #  we should also have a URL with the machine name, but that depends on the existence of names resolution
+    #
+    hostname = socket.gethostname()
+    # try:
+    #     ipaddress = socket.gethostbyname(hostname)
+    # except socket.gaierror as e:
+    #     ipaddress = None
+    ipaddress = "10.7.135.216"
+
+    openapi_schema['servers'] = [
+        {'url': f"http://{ipaddress}:8000/mast/api/v1"},
+        {'url': f"http://{hostname}:8000/mast/api/v1"},
+    ]
 
     openapi_schema['paths'] = dict()
     for sub in subsystems:
