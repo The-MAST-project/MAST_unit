@@ -88,7 +88,7 @@ def make_openapi_schema(app, subsystems: list[Subsystem]):
         for tup in tuples:
             method_name = tup[0]
             method = tup[1]
-            path = f'/{sub.path}/{method_name}'
+            path = f'/{sub.path}/{method_name}' if sub == 'unit' else f'/unit/{sub.path}/{method_name}'
             if (sub.path == 'planewave' and method_name == 'status' or
                     method_name.startswith('mount_') or
                     method_name.startswith('focuser_') or
