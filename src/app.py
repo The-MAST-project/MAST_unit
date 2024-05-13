@@ -89,7 +89,7 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_url='/openapi.json',
     debug=True,
-    default_response_class=ORJSONResponse
+    default_response_class=ORJSONResponse,
 )
 
 app.add_middleware(

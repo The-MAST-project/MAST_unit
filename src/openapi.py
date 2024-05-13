@@ -60,7 +60,7 @@ def make_parameters(method_name, method, docstring) -> list:
 def make_openapi_schema(app, subsystems: list[Subsystem]):
 
     openapi_schema = get_openapi(
-        title="Welcome to the mistery show!",
+        title="The MAST Unit API",
         version="1.0",
         description="This page allows you to explore the MAST Unit Api",
         routes=app.routes,
