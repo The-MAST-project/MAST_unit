@@ -174,7 +174,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.connected = False
         return CanonicalResponse.ok
 
-    def start_exposure(self, seconds: int):
+    def start_exposure(self, seconds: int | str):
         """
         Starts a **MAST** camera exposure
 
@@ -185,6 +185,8 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
         :mastapi:
         """
+        if isinstance(seconds, str):
+            seconds = int(seconds)
         self.errors = []
         if not self._ascom:
             self.errors.append(f"no ASCOM handle")
@@ -419,7 +421,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                     if self.latest_exposure is None:
                         self.latest_exposure = CameraExposure()
                     if not self.latest_exposure.file:
-                        self.latest_exposure.file = path_maker.make_exposure_file_name()
+                        self.latest_exposure.file = path_maker.make_exposure_file_name(camera='guiding')
                     self.latest_exposure.date = datetime.datetime.now()
                     header = {
                         'SIMPLE': 'True',
