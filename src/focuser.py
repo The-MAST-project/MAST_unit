@@ -1,9 +1,11 @@
 from typing import List
 import logging
 from enum import IntFlag, IntEnum, auto
+import win32com.client
 
 from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse
 from common.config import Config
+from common.ascom import ascom_run, ascom_driver_info, AscomDispatcher
 from PlaneWave import pwi4_client
 from mastapi import Mastapi
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
@@ -21,7 +23,11 @@ class FocusDirection(IntEnum):
     Out = auto()
 
 
-class Focuser(Mastapi, Component, SwitchedPowerDevice):
+class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
+    @property
+    def ascom(self) -> win32com.client.Dispatch:
+        return self._ascom
+
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -33,11 +39,11 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         self.conf = Config().toml['focuser']
         self.logger: logging.Logger = logging.getLogger('mast.unit.focuser')
         init_log(self.logger)
-        # try:
-        #     self.ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
-        # except Exception as ex:
-        #     self.logger.exception(ex)
-        #     raise ex
+        try:
+            self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
+        except Exception as ex:
+            self.logger.exception(ex)
+            raise ex
 
         SwitchedPowerDevice.__init__(self, self.conf)
         Component.__init__(self)
@@ -45,12 +51,22 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if not self.is_on():
             self.power_on()
 
+        self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
+        self.connect()
+
         self.target: int | None = None
         self.lower_limit = 0
         self.upper_limit = 30000
-        self.known_as_good_position: int | None = self.conf['known_as_good_position'] \
-            if 'known_as_good_position' in self.conf else None
-        self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
+        response = ascom_run(self, 'MaxStep')
+        if response.failed:
+            self.logger.error(f"could not get MaxStep (failure={response.failure})")
+        else:
+            self.upper_limit = response.value
+
+        self.known_as_good_position: int | None = \
+            self.conf['known_as_good_position'] if 'known_as_good_position' in self.conf \
+            else (self.upper_limit / 2) if self.upper_limit \
+            else None
 
         self._was_shut_down = False
         self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
@@ -92,7 +108,13 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
         if not self.is_on():
             self.power_on()
 
-        self.connected = True
+        ascom_run(self, 'Connected = True')
+        response = ascom_run(self, 'Connected')
+        if response.failed:
+            self.logger.error(f"could not ASCOM Connected = True (failure={response.failure})")
+            self.connected = False
+        else:
+            self.connected = True
         return CanonicalResponse.ok
 
     def disconnect(self):
@@ -158,6 +180,14 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
             self.pw.focuser_goto(position)
         return CanonicalResponse.ok
 
+    def goto_known_as_good_position(self):
+        """
+        Go to the 'known-as-good' position
+        :mastapi:
+        """
+        self.goto(self.known_as_good_position)
+        return CanonicalResponse.ok
+
     def move(self, amount: int, direction: FocusDirection):
         """
         Move the focuser in or out by the specified amount
@@ -221,13 +251,16 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice):
 
         """
         stat = self.pw.status()
-        ret = self.power_status() | self.component_status()
+        ret = self.power_status() | self.ascom_status() | self.component_status()
+        response = ascom_run(self, 'IsMoving')
+        is_moving = response.value if response.succeeded else stat.focuser.is_moving
         ret |= {
-            'moving': stat.focuser.is_moving,
             'lower_limit': self.lower_limit,
             'upper_limit': self.upper_limit,
-            'position': self.position,
             'known_as_good_position': self.known_as_good_position,
+            'position': self.position,
+            'target': self.target,
+            'moving': is_moving,
         }
         time_stamp(ret)
         return ret
