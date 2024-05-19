@@ -10,14 +10,15 @@ import astropy.units as u
 from enum import IntFlag, auto
 from threading import Thread
 
-from common.utils import RepeatTimer, init_log, time_stamp, BASE_UNIT_PATH
+from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH
 from common.ascom import ascom_run, AscomDispatcher
 from common.utils import path_maker, image_to_fits, Component, CanonicalResponse
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
-from mastapi import Mastapi
 
 from fastapi.routing import APIRouter
+
+logger = logging.getLogger('mast.unit.' + __name__)
 
 
 class CameraState(IntFlag):
@@ -49,7 +50,7 @@ class CameraExposure:
         self.date: datetime.datetime | None = None
 
 
-class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
+class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -59,7 +60,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def logger(self) -> Logger:
-        return self.switch_logger
+        return logger
 
     @property
     def ascom(self) -> win32com.client.Dispatch:
@@ -77,12 +78,10 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.is_on():
             self.power_on()
 
-        self._logger: logging.Logger = logging.getLogger('mast.unit.camera')
-        init_log(self._logger)
         try:
             self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
         except Exception as ex:
-            self._logger.exception(ex)
+            logger.exception(ex)
             raise ex
 
         self.latest_exposure: None | CameraExposure = None
@@ -115,7 +114,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
         self._detected = False
 
-        self._logger.info('initialized')
+        logger.info('initialized')
 
     @property
     def connected(self) -> bool:
@@ -152,7 +151,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                 self.RadX = (self.PixelSizeX * self.NumX * u.arcsec).to(u.rad).value
                 self.RadY = (self.PixelSizeY * self.NumY * u.arcsec).to(u.rad).value
         else:
-            self._logger.info(f"failed connected = {value} (failure='{response.failure}')")
+            logger.info(f"failed connected = {value} (failure='{response.failure}')")
         self._detected = value
 
     def connect(self):
@@ -209,7 +208,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.image = None
             self.latest_exposure = CameraExposure()
             self.latest_exposure.seconds = seconds
-            self._logger.info(f'exposure started (seconds={seconds})')
+            logger.info(f'exposure started (seconds={seconds})')
         else:
             if response.is_exception:
                 self.errors.append(response.exception)
@@ -308,18 +307,18 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.start_activity(CameraActivities.CoolingDown)
             response = ascom_run(self, 'CanSetCCDTemperature')
             if response.succeeded:
-                self._logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
+                logger.info(f'cool-down: setting set-point to {self.operational_set_point:.1f}')
                 response = ascom_run(self, f'SetCCDTemperature = {self.operational_set_point}')
                 if response.failed:
-                    self._logger.error(f"failed to set set-point (failure='{response.failure}')")
+                    logger.error(f"failed to set set-point (failure='{response.failure}')")
 
             response = ascom_run(self, 'CoolerOn')
             if response.succeeded and not response.value:
                 response = ascom_run(self, 'CoolerOn = True')
                 if response.failed:
-                    self._logger.error(f"failed to set CoolerOn = True (failure='{response.failure}')")
+                    logger.error(f"failed to set CoolerOn = True (failure='{response.failure}')")
                 else:
-                    self._logger.info(f'cool-down: turned cooler ON')
+                    logger.info(f'cool-down: turned cooler ON')
         return CanonicalResponse.ok
 
     def shutdown(self):
@@ -365,10 +364,10 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                 message = 'warm-up started:'
                 if temp:
                     message = message + f" current temp: {temp:.1f},"
-                self._logger.info(
+                logger.info(
                     f'{message} setting set-point to {self.warm_set_point:.1f}')
             else:
-                self._logger.error(f"could not set warm point (failure='{response.failure}')")
+                logger.error(f"could not set warm point (failure='{response.failure}')")
 
     def abort(self):
         """
@@ -392,7 +391,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             response = ascom_run(self, 'CameraState', no_entry_log=True)
             if response.succeeded:
                 self.last_state = response.value
-                self._logger.info(f'state changed from None to {CameraState(self.last_state)}')
+                logger.info(f'state changed from None to {CameraState(self.last_state)}')
         else:
             response = ascom_run(self, 'CameraState', no_entry_log=True)
             if response.succeeded:
@@ -403,7 +402,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                             state == CameraState.Reading or state == CameraState.Download):
                         response = ascom_run(self, 'PercentCompleted')
                         percent = f"{response.value} %" if response.succeeded else ''
-                    self._logger.info(f'state changed from {CameraState(self.last_state)} to ' +
+                    logger.info(f'state changed from {CameraState(self.last_state)} to ' +
                                       f'{CameraState(state)} {percent}')
                     self.last_state = state
 
@@ -443,11 +442,11 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                             self.image,
                             self.latest_exposure.file,
                             header,
-                            self.logger
+                            logger
                            ]).start()
                 response = ascom_run(self, 'LastExposureDuration')
                 if response.succeeded:
-                    self._logger.info(f"image acquired (seconds={response.value})")
+                    logger.info(f"image acquired (seconds={response.value})")
                 self.end_activity(CameraActivities.Exposing)
 
         if (self.latest_temperature_check and
@@ -458,27 +457,27 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
                 response = ascom_run(self, 'CoolerPower')
                 if response.succeeded:
                     cooler_power = response.value
-                    self._logger.debug(f"{ccd_temp=}, {cooler_power=}")
+                    logger.debug(f"{ccd_temp=}, {cooler_power=}")
         self.latest_temperature_check = now
 
         # if self.is_active(CameraActivities.CoolingDown):
         #     ccd_temp = ascom_run(self, 'CCDTemperature')
         #     # ambient_temp = ascom_run(self, 'HeatSinkTemperature')
-        #     # self._logger.debug(f"{ambient_temp=}, {ccd_temp=}")
+        #     # logger.debug(f"{ambient_temp=}, {ccd_temp=}")
         #     if ccd_temp <= self.operational_set_point:
         #         self.end_activity(CameraActivities.CoolingDown)
         #         self.end_activity(CameraActivities.StartingUp)
-        #         self._logger.info(f'cool-down: done ' +
+        #         logger.info(f'cool-down: done ' +
         #           f'(temperature={ccd_temp:.1f}, set-point={self.operational_set_point})')
 
         # if self.is_active(CameraActivities.WarmingUp):
         #     ccd_temp = ascom_run(self, 'CCDTemperature')
         #     if ccd_temp >= self.warm_set_point:
         #         ascom_run(self, 'CoolerOn = False')
-        #         self._logger.info('turned cooler OFF')
+        #         logger.info('turned cooler OFF')
         #         self.end_activity(CameraActivities.WarmingUp)
         #         self.end_activity(CameraActivities.ShuttingDown)
-        #         self._logger.info(f'warm-up done (temperature={ccd_temp:.1f}, set-point={self.warm_set_point})')
+        #         logger.info(f'warm-up done (temperature={ccd_temp:.1f}, set-point={self.warm_set_point})')
         #         self.power_off()
 
     @property
@@ -522,14 +521,18 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         return self._was_shut_down
 
 
-def camera_status():
-    return camera.status()
-
-
 base_path = BASE_UNIT_PATH + "/camera"
 tag = 'Camera'
-router = APIRouter()
-
-router.add_api_route(base_path + '/status', tags=[tag], endpoint=camera_status)
 
 camera = Camera()
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=camera.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=camera.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=camera.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=camera.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=camera.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=camera.disconnect)
+router.add_api_route(base_path + '/start_exposure', tags=[tag], endpoint=camera.start_exposure)
+router.add_api_route(base_path + '/stop_exposure', tags=[tag], endpoint=camera.stop_exposure)
+router.add_api_route(base_path + '/abort_exposure', tags=[tag], endpoint=camera.abort_exposure)

@@ -3,12 +3,14 @@ import logging
 from enum import IntFlag, IntEnum, auto
 import win32com.client
 
-from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
-from common.ascom import ascom_run, ascom_driver_info, AscomDispatcher
+from common.ascom import ascom_run, AscomDispatcher
 from PlaneWave import pwi4_client
-from mastapi import Mastapi
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from fastapi.routing import APIRouter
+
+logger = logging.getLogger('mast.unit.' + __name__)
 
 
 class FocuserActivities(IntFlag):
@@ -23,7 +25,7 @@ class FocusDirection(IntEnum):
     Out = auto()
 
 
-class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
+class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
@@ -37,12 +39,10 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     def __init__(self):
         self.conf = Config().toml['focuser']
-        self.logger: logging.Logger = logging.getLogger('mast.unit.focuser')
-        init_log(self.logger)
         try:
             self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
         except Exception as ex:
-            self.logger.exception(ex)
+            logger.exception(ex)
             raise ex
 
         SwitchedPowerDevice.__init__(self, self.conf)
@@ -59,7 +59,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.upper_limit = 30000
         response = ascom_run(self, 'MaxStep')
         if response.failed:
-            self.logger.error(f"could not get MaxStep (failure={response.failure})")
+            logger.error(f"could not get MaxStep (failure={response.failure})")
         else:
             self.upper_limit = response.value
 
@@ -73,7 +73,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self.timer.name = 'focuser-timer-thread'
         self.timer.start()
 
-        self.logger.info('initialized')
+        logger.info('initialized')
 
     def startup(self):
         """
@@ -111,7 +111,7 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         ascom_run(self, 'Connected = True')
         response = ascom_run(self, 'Connected')
         if response.failed:
-            self.logger.error(f"could not ASCOM Connected = True (failure={response.failure})")
+            logger.error(f"could not ASCOM Connected = True (failure={response.failure})")
             self.connected = False
         else:
             self.connected = True
@@ -141,10 +141,10 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         # if self.ascom:
         #     response = ascom_run(self, f'Connected = {value}', True)
         #     if response.failed:
-        #         self.logger.error(f"failed to connect (failure='{response.failure}')")
+        #         logger.error(f"failed to connect (failure='{response.failure}')")
 
     @property
-    def position(self) -> int:
+    def position(self):
         """
         :mastapi:
         """
@@ -163,17 +163,17 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         :mastapi:
         """
         if not self.is_on():
-            self.logger.error('Cannot goto - not-powered')
+            logger.error('Cannot goto - not-powered')
             return CanonicalResponse(errors='not powered')
         if not self.connected:
-            self.logger.error('Cannot goto - not-connected')
+            logger.error('Cannot goto - not-connected')
             return CanonicalResponse(errors='not connected')
 
         if isinstance(position, str):
             position = int(position)
         st = self.pw.status()
         if st.focuser.position == position:
-            self.logger.info(f"already at {position=}")
+            logger.info(f"already at {position=}")
         else:
             self.target = position
             self.start_activity(FocuserActivities.Moving)
@@ -206,13 +206,13 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             target = current_position - amount
             if target < self.lower_limit:
                 msg = f"target position ({target}) would be below lower limit ({self.lower_limit})"
-                self.logger.error(msg)
+                logger.error(msg)
                 return CanonicalResponse(errors=msg)
         else:
             target = current_position + amount
             if target >= self.upper_limit:
                 msg = f"target position ({target}) would be below upper limit ({self.upper_limit})"
-                self.logger.error(msg)
+                logger.error(msg)
                 return CanonicalResponse(errors=msg)
 
         self.goto(position=target)
@@ -300,3 +300,25 @@ class Focuser(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
+
+
+def get_position():
+    return focuser.position
+
+base_path = BASE_UNIT_PATH + "/focuser"
+tag = 'Focuser'
+
+focuser = Focuser()
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=focuser.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=focuser.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=focuser.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=focuser.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=focuser.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=focuser.disconnect)
+router.add_api_route(base_path + '/position', tags=[tag], endpoint=get_position)
+router.add_api_route(base_path + '/goto', tags=[tag], endpoint=focuser.goto)
+router.add_api_route(base_path + '/goto_known_as_good_position', tags=[tag],
+                     endpoint=focuser.goto_known_as_good_position)
+router.add_api_route(base_path + '/move', tags=[tag], endpoint=focuser.move)

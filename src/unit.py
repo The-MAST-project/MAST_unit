@@ -21,15 +21,19 @@ from common.utils import RepeatTimer
 from enum import IntFlag, auto
 from threading import Thread
 from multiprocessing.shared_memory import SharedMemory
-from common.utils import init_log, Component, DailyFileHandler
+from common.utils import Component, DailyFileHandler, BASE_UNIT_PATH
 from common.utils import time_stamp, CanonicalResponse
 from common.process import find_process
 import os
 import subprocess
 from enum import Enum
 import json
+from fastapi.routing import APIRouter
 
 GUIDING_SHM_NAME = 'PlateSolving_Image'
+
+
+logger = logging.getLogger('mast.unit')
 
 
 class GuideDirections(Enum):
@@ -74,7 +78,7 @@ class Unit(Component):
             cls._instance = super(Unit, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, unit_id: int):
+    def __init__(self, id_: int):
         Component.__init__(self)
 
         self._connected: bool = False
@@ -88,16 +92,13 @@ class Unit(Component):
         self.was_tracking_before_guiding: bool = False
         self.sock_to_solver: socket = None
 
-        self.logger: logging.Logger = logging.getLogger('mast.unit')
-        init_log(self.logger)
+        file_handler = [h for h in logger.handlers if isinstance(h, DailyFileHandler)]
+        logger.info(f"logging to '{file_handler[0].path}'")
 
-        file_handler = [h for h in self.logger.handlers if isinstance(h, DailyFileHandler)]
-        self.logger.info(f"logging to '{file_handler[0].path}'")
+        if not 1 <= id_ <= Unit.MAX_UNITS:
+            raise f"Bad unit id '{id_}', must be in [1..{Unit.MAX_UNITS}]"
 
-        if not 1 <= unit_id <= Unit.MAX_UNITS:
-            raise f"Bad unit id '{unit_id}', must be in [1..{Unit.MAX_UNITS}]"
-
-        self.id = unit_id
+        self.id = id_
         try:
             self.power_switch = PowerSwitchFactory.get_instance('1')
             self.mount: Mount = Mount()
@@ -107,7 +108,7 @@ class Unit(Component):
             self.focuser: Focuser = Focuser()
             self.pw: pwi4_client.PWI4 = pwi4_client.PWI4()
         except Exception as ex:
-            self.logger.exception(msg='could not create a Unit', exc_info=ex)
+            logger.exception(msg='could not create a Unit', exc_info=ex)
             raise ex
 
         self.components: List[Component] = [
@@ -209,19 +210,19 @@ class Unit(Component):
         :mastapi:
         """
         if not self.connected:
-            self.logger.error('Cannot start PlaneWave autofocus - not-connected')
+            logger.error('Cannot start PlaneWave autofocus - not-connected')
             return
 
         if self.pw.status().autofocus.is_running:
-            self.logger.info("autofocus already running")
+            logger.info("autofocus already running")
             return
 
         self.pw.request("/autofocus/start")
         while not self.pw.status().autofocus.is_running:        # wait for it to actually start
-            self.logger.debug('waiting for PlaneWave autofocus to start')
+            logger.debug('waiting for PlaneWave autofocus to start')
             time.sleep(1)
         self.start_activity(UnitActivities.Autofocusing)
-        self.logger.debug('PlaneWave autofocus has started')
+        logger.debug('PlaneWave autofocus has started')
         return CanonicalResponse.ok
 
     def stop_autofocus(self):
@@ -231,11 +232,11 @@ class Unit(Component):
         :mastapi:
         """
         if not self.connected:
-            self.logger.error('Cannot stop PlaneWave autofocus - not-connected')
+            logger.error('Cannot stop PlaneWave autofocus - not-connected')
             return
 
         if not self.pw.status().autofocus.is_running:
-            self.logger.info("Cannot stop PlaneWave autofocus, it is not running")
+            logger.info("Cannot stop PlaneWave autofocus, it is not running")
             return
         self.pw.request("/autofocus/stop")
         self.end_activity(UnitActivities.Autofocusing)
@@ -258,7 +259,7 @@ class Unit(Component):
             pass
 
         self.sock_to_solver.shutdown(socket.SHUT_RDWR)
-        self.logger.info(f'guiding ended')
+        logger.info(f'guiding ended')
 
     def do_guide(self):
 
@@ -271,11 +272,11 @@ class Unit(Component):
         proc = find_process(patt='PSSimulator')
         if proc:
             proc.kill()
-            self.logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
+            logger.info(f'killed existing plate solving simulator process (pid={proc.pid})')
 
         sim_dir = os.path.realpath(os.path.join('src', 'PlateSolveSimulator'))
         sim_cmd = os.path.join(sim_dir, 'run.bat')
-        self.logger.info(f'starting plate-solver process with: {sim_cmd}')
+        logger.info(f'starting plate-solver process with: {sim_cmd}')
         subprocess.Popen(sim_cmd, cwd=sim_dir, shell=True)
         start = time.time()
         while time.time() - start <= 20:
@@ -286,30 +287,30 @@ class Unit(Component):
                 time.sleep(1)
 
         if self.plate_solver_process:
-            self.logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
+            logger.info(f'plate solver simulator process pid={self.plate_solver_process.pid}')
         else:
-            self.logger.error(f'No solver process after 20 seconds')
+            logger.error(f'No solver process after 20 seconds')
             return
 
-        # self.logger.info(f"creating server socket ...")
+        # logger.info(f"creating server socket ...")
         server = socket.create_server(guiding.guider_address_port, family=socket.AF_INET)
-        self.logger.info(f"listening on {guiding.guider_address_port}")
+        logger.info(f"listening on {guiding.guider_address_port}")
         server.listen()
-        # self.logger.info(f"accepting on server socket")
+        # logger.info(f"accepting on server socket")
         self.sock_to_solver, address = server.accept()
-        # self.logger.info("accepted on server socket")
+        # logger.info("accepted on server socket")
 
-        # self.logger.info("receiving on server socket")
+        # logger.info("receiving on server socket")
         s = self.sock_to_solver.recv(1024)
-        # self.logger.info(f"received '{s}' on server socket")
+        # logger.info(f"received '{s}' on server socket")
         hello = json.loads(s.decode(encoding='utf-8'))
         if not hello['ready']:
             pass  # TBD
 
-        self.logger.info(f'plate solver simulator is ready')
+        logger.info(f'plate solver simulator is ready')
 
         while self.is_active(UnitActivities.Guiding):
-            self.logger.info(f'starting {self.GUIDING_EXPOSURE_SECONDS} seconds guiding exposure')
+            logger.info(f'starting {self.GUIDING_EXPOSURE_SECONDS} seconds guiding exposure')
             self.camera.start_exposure(seconds=self.GUIDING_EXPOSURE_SECONDS)
             while self.camera.is_active(CameraActivities.Exposing):
                 if not self.is_active(UnitActivities.Guiding):
@@ -323,10 +324,10 @@ class Unit(Component):
 
             image = self.camera.image
 
-            self.logger.info(f'guiding exposure done, getting the image from the camera')
+            logger.info(f'guiding exposure done, getting the image from the camera')
             shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=int, buffer=self.shm.buf)
             shared_image[:] = image[:]
-            self.logger.info(f'copied image to shared memory')
+            logger.info(f'copied image to shared memory')
 
             if not self.is_active(UnitActivities.Guiding):
                 self.end_guiding()
@@ -357,13 +358,13 @@ class Unit(Component):
             response = json.loads(b)
 
             if not response['success']:
-                self.logger.warning(f"solver could not solve, reason '{response.reasons}")
+                logger.warning(f"solver could not solve, reason '{response.reasons}")
                 continue
 
-            # self.logger.info('parsing plate solving result')
+            # logger.info('parsing plate solving result')
 
             if response['success']:
-                self.logger.info(f"plate solving succeeded")
+                logger.info(f"plate solving succeeded")
                 solved_ra = response['ra']
                 solved_dec = response['dec']
                 pw_status = self.pw.status()
@@ -376,13 +377,13 @@ class Unit(Component):
                 delta_ra_arcsec = delta_ra / (60 * 60)
                 delta_dec_arcsec = delta_dec / (60 * 60)
 
-                self.logger.info(f'telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, '
-                                 f'dec={delta_dec_arcsec:.10f}arcsec')
+                logger.info(f'telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, ' +
+                            f'dec={delta_dec_arcsec:.10f}arcsec')
                 self.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
             else:
                 pass  # TBD
 
-            self.logger.info(f"done solving cycle, sleeping {self.GUIDING_INTER_EXPOSURE_SECONDS} seconds ...")
+            logger.info(f"done solving cycle, sleeping {self.GUIDING_INTER_EXPOSURE_SECONDS} seconds ...")
             # avoid sleeping for a long time, for better agility at sensing that guiding was stopped
             td = datetime.timedelta(seconds=self.GUIDING_INTER_EXPOSURE_SECONDS)
             start = datetime.datetime.now()
@@ -399,7 +400,7 @@ class Unit(Component):
         :mastapi:
         """
         if not self.connected:
-            self.logger.warning('cannot start guiding - not-connected')
+            logger.warning('cannot start guiding - not-connected')
             return
 
         # if self.is_active(UnitActivities.Guiding):
@@ -409,7 +410,7 @@ class Unit(Component):
         self.was_tracking_before_guiding = pw_stat.mount.is_tracking
         if not self.was_tracking_before_guiding:
             self.pw.mount_tracking_on()
-            self.logger.info('started mount tracking')
+            logger.info('started mount tracking')
 
         self.start_activity(UnitActivities.Guiding)
         Thread(name='guiding-thread', target=self.do_guide).start()
@@ -421,7 +422,7 @@ class Unit(Component):
         :mastapi:
         """
         if not self.connected:
-            self.logger.warning('Cannot stop guiding - not-connected')
+            logger.warning('Cannot stop guiding - not-connected')
             return
 
         if self.is_active(UnitActivities.Guiding):
@@ -430,13 +431,13 @@ class Unit(Component):
         if self.plate_solver_process:
             try:
                 self.plate_solver_process.kill()
-                self.logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
+                logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
             except psutil.NoSuchProcess:
                 pass
 
         if not self.was_tracking_before_guiding:
             self.mount.stop_tracking()
-            self.logger.info('stopped tracking')
+            logger.info('stopped tracking')
 
     def is_guiding(self) -> bool:
         if not self.connected:
@@ -546,7 +547,7 @@ class Unit(Component):
         stop_tracking = False
         if not pw_stat.mount.is_tracking:
             stop_tracking = True
-            self.logger.info(f"starting tracking")
+            logger.info(f"starting tracking")
             self.mount.start_tracking()
 
         ra = pw_stat.mount.ra_j2000_hours
@@ -558,17 +559,17 @@ class Unit(Component):
             self.camera.start_exposure(exposure_seconds)
             time.sleep(.5)
         except Exception as ex:
-            self.logger.exception('could not start exposure:', ex)
+            logger.exception('could not start exposure:', ex)
 
         while not self.camera.ascom.ImageReady:
-            self.logger.info(f"Waiting for ImageReady ...")
+            logger.info(f"Waiting for ImageReady ...")
             time.sleep(1)
 
-        self.logger.info(f"loading image")
+        logger.info(f"loading image")
         image = self.camera.ascom.ImageArray
 
         if stop_tracking:
-            self.logger.info(f"stopped tracking")
+            logger.info(f"stopped tracking")
             self.mount.stop_tracking()
 
         header = fits.Header()
@@ -584,9 +585,9 @@ class Unit(Component):
         fits_file = 'c:/Temp/xxx.fits'
         try:
             hdu_list.writeto(fits_file, overwrite=True)
-            self.logger.info(f"wrote file '{fits_file}'")
+            logger.info(f"wrote file '{fits_file}'")
         except Exception as ex:
-            self.logger.error(f"failed to write to '{fits_file}'", exc_info=ex)
+            logger.error(f"failed to write to '{fits_file}'", exc_info=ex)
 
         # result = platesolve(fits_file, self.camera.PixelSizeX)
         # os.remove(fits_file)
@@ -616,9 +617,9 @@ class Unit(Component):
         if self.is_active(UnitActivities.Autofocusing):
             autofocus_status = self.pw.status().autofocus
             if not autofocus_status:
-                self.logger.error('Empty PlaneWave autofocus status')
+                logger.error('Empty PlaneWave autofocus status')
             elif not autofocus_status.is_running:   # it's done
-                self.logger.info('PlaneWave autofocus ended, getting status.')
+                logger.info('PlaneWave autofocus ended, getting status.')
                 self.autofocus_result.success = autofocus_status.success
                 self.autofocus_result.best_position = autofocus_status.best_position
                 self.autofocus_result.tolerance = autofocus_status.tolerance
@@ -626,10 +627,10 @@ class Unit(Component):
 
                 self.end_activity(UnitActivities.Autofocusing)
             else:
-                self.logger.info('PlaneWave autofocus in progress')
+                logger.info('PlaneWave autofocus in progress')
 
     def end_lifespan(self):
-        self.logger.info('unit end lifespan')
+        logger.info('unit end lifespan')
         if 'plate_solver_process' in self.__dict__.keys() and self.plate_solver_process:
             try:
                 self.plate_solver_process.kill()
@@ -644,7 +645,7 @@ class Unit(Component):
         self.shutdown()
 
     def start_lifespan(self):
-        self.logger.debug('unit start lifespan')
+        logger.debug('unit start lifespan')
         self.startup()
 
     @property
@@ -666,3 +667,34 @@ class Unit(Component):
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
+
+
+unit_id: int | None = None
+mast_unit_env: str | None = None
+hostname = socket.gethostname()
+if hostname.startswith('mast'):
+    try:
+        unit_id = int(hostname[4:])
+    except ValueError:
+        try:
+            mast_unit_env = os.getenv('MAST_UNIT')
+            unit_id = int(mast_unit_env)
+        except ValueError:
+            logger.error(f"Cannot figure out the MAST unit_id ({hostname=}, {mast_unit_env=}")
+
+base_path = BASE_UNIT_PATH
+tag = 'Unit'
+
+unit = Unit(id_=unit_id)
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=unit.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=unit.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=unit.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=unit.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=unit.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=unit.disconnect)
+router.add_api_route(base_path + '/start_autofocus', tags=[tag], endpoint=unit.start_autofocus)
+router.add_api_route(base_path + '/start_autofocus', tags=[tag], endpoint=unit.start_autofocus)
+router.add_api_route(base_path + '/start_guiding', tags=[tag], endpoint=unit.start_guiding)
+router.add_api_route(base_path + '/start_guiding', tags=[tag], endpoint=unit.start_guiding)

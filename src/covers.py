@@ -5,11 +5,13 @@ import logging
 from enum import IntFlag, Enum, auto
 from typing import List
 
-from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse
-from common.ascom import ascom_driver_info, ascom_run, AscomDispatcher
+from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
+from common.ascom import ascom_run, AscomDispatcher
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
-from mastapi import Mastapi
+from fastapi.routing import APIRouter
+
+logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
 
 
 class CoverActivities(IntFlag):
@@ -30,7 +32,7 @@ class CoversState(Enum):
     Error = 5
 
 
-class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
+class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -47,16 +49,16 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def logger(self) -> Logger:
-        return self._logger
+        # return logger
+        return logger
 
     def __init__(self):
         self.conf: dict = Config().toml['covers']
-        self._logger: logging.Logger = logging.getLogger('mast.unit.covers')
-        init_log(self._logger)
         try:
             self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
         except Exception as ex:
-            self._logger.exception(ex)
+            # logger.exception(ex)
+            logger.exception(ex)
             raise ex
 
         SwitchedPowerDevice.__init__(self, self.conf)
@@ -72,7 +74,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         self._connected: bool = False
         self._was_shut_down = False
 
-        self._logger.info('initialized')
+        logger.info('initialized')
 
     def connect(self):
         """
@@ -82,7 +84,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         """
         response = ascom_run(self, 'Connected = True')
         if response.failed:
-            self._logger.error(f"failed to connect (failure={response.failure})")
+            logger.error(f"failed to connect (failure={response.failure})")
             self._connected = False
         else:
             self._connected = True
@@ -106,7 +108,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
 
     @connected.setter
     def connected(self, value):
-        self._logger.info(f"connected = {value}")
+        logger.info(f"connected = {value}")
         try:
             response = ascom_run(self, f'Connected = {value}')
             if response.succeeded:
@@ -143,11 +145,11 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.connected:
             return
 
-        self._logger.info('opening covers')
+        logger.info('opening covers')
         self.start_activity(CoverActivities.Opening)
         response = ascom_run(self, 'OpenCover()')
         if response.failed:
-            self._logger.error(f"failed to open covers (failure='{response.failure}')")
+            logger.error(f"failed to open covers (failure='{response.failure}')")
         return CanonicalResponse.ok
 
     def close(self):
@@ -158,11 +160,11 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.connected:
             return
 
-        self._logger.info('closing covers')
+        logger.info('closing covers')
         self.start_activity(CoverActivities.Closing)
         response = ascom_run(self, 'CloseCover()')
         if response.failed:
-            self._logger.error(f"failed to close covers (failure='{response.failure}')")
+            logger.error(f"failed to close covers (failure='{response.failure}')")
         return CanonicalResponse.ok
 
     def startup(self):
@@ -205,7 +207,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         """
         response = ascom_run(self, 'HaltCover()')
         if response.failed:
-            self._logger.error(f"failed to halt covers (failure='{response.failure}')")
+            logger.error(f"failed to halt covers (failure='{response.failure}')")
         for activity in (CoverActivities.StartingUp, CoverActivities.ShuttingDown,
                          CoverActivities.Closing, CoverActivities.Opening):
             if self.is_active(activity):
@@ -216,7 +218,7 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.connected:
             return
 
-        # self._logger.debug(f"activities: {self.activities}, state: {self.state()}")
+        # logger.debug(f"activities: {self.activities}, state: {self.state()}")
         if self.is_active(CoverActivities.Opening) and self.state == CoversState.Open:
             self.end_activity(CoverActivities.Opening)
             if self.is_active(CoverActivities.StartingUp):
@@ -263,4 +265,19 @@ class Covers(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
-    
+
+
+base_path = BASE_UNIT_PATH + "/covers"
+tag = 'Covers'
+
+covers = Covers()
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=covers.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=covers.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=covers.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=covers.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=covers.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=covers.disconnect)
+router.add_api_route(base_path + '/start_exposure', tags=[tag], endpoint=covers.open)
+router.add_api_route(base_path + '/stop_exposure', tags=[tag], endpoint=covers.close)

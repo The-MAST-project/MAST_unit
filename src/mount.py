@@ -7,13 +7,15 @@ import logging
 from PlaneWave import pwi4_client
 from typing import List
 from enum import IntFlag, auto
-from common.utils import init_log, Component, time_stamp
+from common.utils import init_log, Component, time_stamp, BASE_UNIT_PATH
 from common.utils import RepeatTimer, CanonicalResponse
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from common.config import Config
-from common.ascom import ascom_driver_info, ascom_run, AscomDispatcher
+from common.ascom import ascom_run, AscomDispatcher
 from common.networking import NetworkedDevice
-from mastapi import Mastapi
+from fastapi.routing import APIRouter
+
+logger = logging.getLogger('mast.unit.' + __name__)
 
 
 class MountActivities(IntFlag):
@@ -25,7 +27,7 @@ class MountActivities(IntFlag):
     FindingHome = auto()
 
 
-class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispatcher):
+class Mount(Component, SwitchedPowerDevice, NetworkedDevice, AscomDispatcher):
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -35,7 +37,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
 
     @property
     def logger(self) -> Logger:
-        return self._logger
+        return logger
 
     @property
     def ascom(self) -> win32com.client.Dispatch:
@@ -43,8 +45,6 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
 
     def __init__(self):
         self.conf: dict = Config().toml['mount']
-        self._logger: logging.Logger = logging.getLogger('mast.unit.mount')
-        init_log(self._logger)
 
         SwitchedPowerDevice.__init__(self, self.conf)
         Component.__init__(self)
@@ -75,7 +75,7 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
 
         self.errors = []
 
-        self._logger.info('initialized')
+        logger.info('initialized')
 
     def connect(self):
         """
@@ -119,13 +119,13 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
                 response = ascom_run(self, 'Connected = True')
                 if response.failed:
                     self.errors.append(f"could not ASCOM connect")
-                    self._logger.error(f"failed to ASCOM connect (failure='{response.failure}')")
+                    logger.error(f"failed to ASCOM connect (failure='{response.failure}')")
                 if not st.mount.is_connected:
                     self.pw.mount_connect()
                 if not st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
                     self.pw.mount_enable(0)
                     self.pw.mount_enable(1)
-                self._logger.info(f'connected = {value}, axes enabled')
+                logger.info(f'connected = {value}, axes enabled')
             else:
                 if st.mount.axis0.is_enabled or st.mount.axis1.is_enabled:
                     st.pw.mount_disable()
@@ -133,9 +133,9 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
                 response = ascom_run(self, 'Connected = False')
                 if response.failed:
                     self.errors.append(response.failure)
-                self._logger.info(f'connected = {value}, axes disabled, disconnected')
+                logger.info(f'connected = {value}, axes disabled, disconnected')
         except Exception as ex:
-            self._logger.exception(ex)
+            logger.exception(ex)
 
     def startup(self):
         """
@@ -282,8 +282,8 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
     @property
     def operational(self) -> bool:
         st = self.pw.status()
-        return all([self.is_on(), self.detected, self.connected, not self.was_shut_down, self.ascom, st.mount.is_connected,
-                    st.mount.axis0.is_enabled, st.mount.axis1.is_enabled])
+        return all([self.is_on(), self.detected, self.connected, not self.was_shut_down,
+                    self.ascom, st.mount.is_connected, st.mount.axis0.is_enabled, st.mount.axis1.is_enabled])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -325,4 +325,21 @@ class Mount(Mastapi, Component, SwitchedPowerDevice, NetworkedDevice, AscomDispa
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
-    
+
+
+base_path = BASE_UNIT_PATH + "/mount"
+tag = 'Mount'
+
+mount = Mount()
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=mount.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=mount.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=mount.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=mount.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=mount.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=mount.disconnect)
+router.add_api_route(base_path + '/start_tracking', tags=[tag], endpoint=mount.start_tracking)
+router.add_api_route(base_path + '/stop_tracking', tags=[tag], endpoint=mount.stop_tracking)
+router.add_api_route(base_path + '/park', tags=[tag], endpoint=mount.park)
+router.add_api_route(base_path + '/find_home', tags=[tag], endpoint=mount.find_home)

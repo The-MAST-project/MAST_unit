@@ -1,5 +1,6 @@
 [global]
   TopFolder = "C:\\MAST"
+  log_level = 'debug'   # one of 'debug', 'info', 'warning', 'error', 'critical'
 
 [server]
   port = 8000

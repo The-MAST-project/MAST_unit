@@ -4,13 +4,14 @@ from enum import IntEnum, IntFlag, auto
 import datetime
 from typing import List
 
-from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse
+from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
 from mastapi import Mastapi
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 import os
 import sys
 import platform
+from fastapi.routing import APIRouter
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
 ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
@@ -28,6 +29,8 @@ if platform.system() == "Windows":
     from pyximc import (Result,  EnumerateFlags, device_information_t, string_at, byref, MvcmdStatus, cast, POINTER,
                         c_int, status_t, edges_settings_t)
     from pyximc import lib as ximclib
+
+logger = logging.getLogger('mast.unit.' + __name__)
 
 
 class StageActivities(IntFlag):
@@ -76,8 +79,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     def __init__(self):
         self.conf: dict = Config().toml['stage']
-        self.logger: logging.Logger = logging.getLogger('mast.unit.stage')
-        init_log(self.logger)
+        # logger: logging.Logger = logging.getLogger('mast.unit.stage')
+        # init_log(logger)
 
         SwitchedPowerDevice.__init__(self, self.conf)
         Component.__init__(self)
@@ -168,9 +171,9 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             self.timer = RepeatTimer(2, function=self.ontimer)
             self.timer.name = 'stage-timer-thread'
             self.timer.start()
-            self.logger.info(f'initialized ({self.device_info})')
+            logger.info(f'initialized ({self.device_info})')
         else:
-            self.logger.error(f"no device detected")
+            logger.error(f"no device detected")
 
     @property
     def connected(self) -> bool:
@@ -189,7 +192,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             ximclib.close_device(byref(cast(self.device, POINTER(c_int))))
             self.device = None
 
-        self.logger.info(f'connected = {value} => {self.connected}')
+        logger.info(f'connected = {value} => {self.connected}')
 
     def connect(self):
         """
@@ -264,7 +267,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             raise Exception('Not connected')
 
         if self.close_enough(value):
-            self.logger.info(f'Not changing position ({self.position} is close enough to {value}')
+            logger.info(f'Not changing position ({self.position} is close enough to {value}')
             return
 
         self.target = value
@@ -337,12 +340,12 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             try:
                 preset = PresetPosition.__getitem__(preset)
             except KeyError:
-                self.logger.warning(f"No such preset position '{preset}'")
+                logger.warning(f"No such preset position '{preset}'")
                 return
 
         preset_position = self.presets[preset]
         if self.close_enough(preset_position):
-            self.logger.info(f'Not moving (current position:{self.position}) close enough to {preset_position})')
+            logger.info(f'Not moving (current position:{self.position}) close enough to {preset_position})')
             return
 
         self.target = preset_position
@@ -350,7 +353,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         self.ticks_at_start = self.position
         self.motion_start_time = datetime.datetime.now()
-        self.logger.info(f'move: at {self.position} started moving to {self.target}')
+        logger.info(f'move: at {self.position} started moving to {self.target}')
 
         try:
             with self.stage_lock:
@@ -358,12 +361,12 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             if response != Result.Ok:
                 self.target = None
                 msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
-                self.logger.error(msg)
+                logger.error(msg)
                 return CanonicalResponse(errors=msg)
         except Exception as ex:
             self.target = None
             msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
-            self.logger.exception(msg, ex)
+            logger.exception(msg, ex)
             return CanonicalResponse(exception=ex)
         return CanonicalResponse.ok
 
@@ -393,11 +396,11 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 response = ximclib.command_movr(self.device, microns, 0)
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {microns})'
-                self.logger.error(msg)
+                logger.error(msg)
                 return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {microns})'
-            self.logger.exception(msg, ex)
+            logger.exception(msg, ex)
             return CanonicalResponse(exception=ex)
         return CanonicalResponse.ok
 
@@ -427,11 +430,11 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 response = ximclib.command_movr(self.device, amount, 0)
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {amount})'
-                self.logger.error(msg)
+                logger.error(msg)
                 return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {amount})'
-            self.logger.exception(msg, ex)
+            logger.exception(msg, ex)
             return CanonicalResponse(exception=ex)
         return CanonicalResponse.ok
 
@@ -484,3 +487,20 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
+
+
+base_path = BASE_UNIT_PATH + "/mount"
+tag = 'Mount'
+
+stage = Stage()
+
+router = APIRouter()
+router.add_api_route(base_path + '/startup', tags=[tag], endpoint=stage.startup)
+router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=stage.shutdown)
+router.add_api_route(base_path + '/abort', tags=[tag], endpoint=stage.abort)
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=stage.status)
+router.add_api_route(base_path + '/connect', tags=[tag], endpoint=stage.connect)
+router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=stage.disconnect)
+router.add_api_route(base_path + '/move_native', tags=[tag], endpoint=stage.move_native)
+router.add_api_route(base_path + '/move_microns', tags=[tag], endpoint=stage.move_microns)
+router.add_api_route(base_path + '/move_to_preset', tags=[tag], endpoint=stage.move_to_preset)
