@@ -7,18 +7,20 @@ import win32com.client
 from typing import List
 import logging
 import astropy.units as u
-from enum import IntFlag, Enum, auto
+from enum import IntFlag, auto
 from threading import Thread
 
-from common.utils import RepeatTimer, init_log, time_stamp
+from common.utils import RepeatTimer, init_log, time_stamp, BASE_UNIT_PATH
 from common.ascom import ascom_run, AscomDispatcher
 from common.utils import path_maker, image_to_fits, Component, CanonicalResponse
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from mastapi import Mastapi
 
+from fastapi.routing import APIRouter
 
-class CameraState(Enum):
+
+class CameraState(IntFlag):
     """
     Camera states as per https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CameraStates.htm
     """
@@ -254,7 +256,7 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
             self.errors.append(f"could not StopExposure(), (failure='{response.failure}')")
         return CanonicalResponse(errors=self.errors) if self.errors else CanonicalResponse.ok
 
-    def status(self) -> dict:
+    def status(self):
         """
         Gets the **MAST** camera status
 
@@ -518,4 +520,16 @@ class Camera(Mastapi, Component, SwitchedPowerDevice, AscomDispatcher):
     @property
     def was_shut_down(self) -> bool:
         return self._was_shut_down
-    
+
+
+def camera_status():
+    return camera.status()
+
+
+base_path = BASE_UNIT_PATH + "/camera"
+tag = 'Camera'
+router = APIRouter()
+
+router.add_api_route(base_path + '/status', tags=[tag], endpoint=camera_status)
+
+camera = Camera()
