@@ -164,10 +164,10 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         :mastapi:
         """
         if not self.is_on():
-            logger.error('Cannot goto - not-powered')
+            logger.error(f'Cannot goto {position} - not-powered')
             return CanonicalResponse(errors='not powered')
         if not self.connected:
-            logger.error('Cannot goto - not-connected')
+            logger.error(f'Cannot goto {position} - not-connected')
             return CanonicalResponse(errors='not connected')
 
         if isinstance(position, str):
