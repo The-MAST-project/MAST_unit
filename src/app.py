@@ -22,7 +22,7 @@ else:
     log_level = logging.WARNING
 logging.basicConfig(level=log_level)
 logger = logging.getLogger('mast.unit')
-init_log(logger, level=log_level)
+init_log(logger, level=log_level, file_name='mast-unit')
 
 logger.info('Starting ...')
 
@@ -66,11 +66,6 @@ while True:
     except Exception as ex:
         logger.error("cannot connect to PWI4", exc_info=ex)
         app_quit()
-
-# unit = Unit(unit_id)
-# if not unit:
-#     logger.error("cannot create a Unit")
-#     app_quit()
 
 
 @asynccontextmanager

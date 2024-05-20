@@ -11,11 +11,12 @@ from common.utils import init_log, Component, time_stamp, BASE_UNIT_PATH
 from common.utils import RepeatTimer, CanonicalResponse
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from common.config import Config
-from common.ascom import ascom_run, AscomDispatcher
 from common.networking import NetworkedDevice
 from fastapi.routing import APIRouter
 
 logger = logging.getLogger('mast.unit.' + __name__)
+
+from common.ascom import ascom_run, AscomDispatcher
 
 
 class MountActivities(IntFlag):

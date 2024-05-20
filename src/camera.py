@@ -11,7 +11,6 @@ from enum import IntFlag, auto
 from threading import Thread
 
 from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH
-from common.ascom import ascom_run, AscomDispatcher
 from common.utils import path_maker, image_to_fits, Component, CanonicalResponse
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
@@ -19,6 +18,8 @@ from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 
 logger = logging.getLogger('mast.unit.' + __name__)
+
+from common.ascom import ascom_run, AscomDispatcher
 
 
 class CameraState(IntFlag):

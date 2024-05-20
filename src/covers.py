@@ -5,13 +5,14 @@ import logging
 from enum import IntFlag, Enum, auto
 from typing import List
 
-from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
-from common.ascom import ascom_run, AscomDispatcher
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 
 logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
+
+from common.ascom import ascom_run, AscomDispatcher
 
 
 class CoverActivities(IntFlag):

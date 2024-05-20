@@ -5,12 +5,13 @@ import win32com.client
 
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
-from common.ascom import ascom_run, AscomDispatcher
 from PlaneWave import pwi4_client
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 
 logger = logging.getLogger('mast.unit.' + __name__)
+
+from common.ascom import ascom_run, AscomDispatcher
 
 
 class FocuserActivities(IntFlag):
