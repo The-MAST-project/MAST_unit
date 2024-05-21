@@ -33,7 +33,7 @@
     user = "admin"
     password = "1234"
     cycle_time = 5
-    outlets = {1="Mount", 2="Stage", 3="Camera", 4="Focuser", 5="Covers"}
+    outlets = {1="Mount", 2="Stage", 3="Camera", 4="Focuser", 5="Covers", 6="Computer"}
     timeout = 20
 
 [network]
