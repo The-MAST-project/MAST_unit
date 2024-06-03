@@ -38,10 +38,10 @@ def app_quit():
     parent.kill()
 
 
-ensure_process_is_running(pattern='PWI4',
+ensure_process_is_running(name='PWI4.exe',
                           cmd='C:\\Program Files (x86)\\PlaneWave Instruments\\PlaneWave Interface 4\\PWI4.exe',
                           logger=logger, shell=True)
-ensure_process_is_running(pattern='PWShutter',
+ensure_process_is_running(name='PWShutter.exe',
                           cmd="C:\\Program Files (x86)\\PlaneWave Instruments\\" +
                               "PlaneWave Shutter Control\\PWShutter.exe",
                           logger=logger,
