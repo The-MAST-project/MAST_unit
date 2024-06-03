@@ -29,11 +29,11 @@
   power = {'switch'=1, 'outlet'=5}
 
 [power-switch.1]
-    network = {address="192.168.0.100"}
+    network = {address=""}
     user = "admin"
     password = "1234"
     cycle_time = 5
-    outlets = {1="Mount", 2="Stage", 3="Camera", 4="Focuser", 5="Covers", 6="Computer"}
+    outlets = {1="Mount", 2="Stage", 3="Camera", 4="Focuser", 5="Covers", 6="Computer", 7="Outlet 7", 8="Outlet 8"}
     timeout = 20
 
 [network]
