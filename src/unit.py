@@ -78,7 +78,7 @@ class Unit(Component):
             cls._instance = super(Unit, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, id_: int):
+    def __init__(self, id_: int | str):
         Component.__init__(self)
 
         self._connected: bool = False
@@ -95,7 +95,7 @@ class Unit(Component):
         file_handler = [h for h in logger.handlers if isinstance(h, DailyFileHandler)]
         logger.info(f"logging to '{file_handler[0].path}'")
 
-        if not 1 <= id_ <= Unit.MAX_UNITS:
+        if isinstance(id_, int) and not 1 <= id_ <= Unit.MAX_UNITS:
             raise f"Bad unit id '{id_}', must be in [1..{Unit.MAX_UNITS}]"
 
         self.id = id_
@@ -669,18 +669,15 @@ class Unit(Component):
         return self._was_shut_down
 
 
-unit_id: int | None = None
-mast_unit_env: str | None = None
+unit_id: int | str | None = None
 hostname = socket.gethostname()
 if hostname.startswith('mast'):
     try:
         unit_id = int(hostname[4:])
     except ValueError:
-        try:
-            mast_unit_env = os.getenv('MAST_UNIT')
-            unit_id = int(mast_unit_env)
-        except ValueError:
-            logger.error(f"Cannot figure out the MAST unit_id ({hostname=}, {mast_unit_env=}")
+        unit_id = hostname[4:]
+else:
+    logger.error(f"Cannot figure out the MAST unit_id ({hostname=})")
 
 base_path = BASE_UNIT_PATH
 tag = 'Unit'
