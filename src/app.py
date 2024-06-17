@@ -1,3 +1,5 @@
+import socket
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,9 +17,10 @@ from common.config import Config
 #
 # Log level configuration from the 'global' section of the 'config' file
 #
-global_conf = Config().toml['global']
-if 'log_level' in global_conf:
-    log_level = getattr(logging, global_conf['log_level'].upper())
+unit_conf = Config().get_unit(socket.gethostname())
+
+if 'log_level' in unit_conf['global']:
+    log_level = getattr(logging, unit_conf['global']['log_level'].upper())
 else:
     log_level = logging.WARNING
 logging.basicConfig(level=log_level)
@@ -25,6 +28,11 @@ logger = logging.getLogger('mast.unit')
 init_log(logger, level=log_level, file_name='mast-unit')
 
 logger.info('Starting ...')
+
+if 'http_proxy' in os.environ:
+    del os.environ['http_proxy']
+if 'https_proxy' in os.environ:
+    del os.environ['https_proxy']
 
 pw = None
 
@@ -51,6 +59,7 @@ from camera import router as camera_router
 from covers import router as covers_router
 from mount import router as mount_router
 from focuser import router as focuser_router
+from stage import router as stage_router
 from unit import router as unit_router
 from unit import unit
 
@@ -93,11 +102,12 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-app.include_router(camera_router)
-app.include_router(covers_router)
-app.include_router(mount_router)
-app.include_router(focuser_router)
 app.include_router(unit_router)
+app.include_router(mount_router)
+app.include_router(covers_router)
+app.include_router(focuser_router)
+app.include_router(stage_router)
+app.include_router(camera_router)
 
 
 @app.get("/favicon.ico")
@@ -215,9 +225,10 @@ def read_favicon():
 
 
 if __name__ == "__main__":
-    server_conf = Config().toml['server']
+    server_conf = Config().get_service(service_name='unit')
+    host = server_conf['listen_on'] if 'listen_on' in server_conf else '0.0.0.0'
     port = server_conf['port'] if 'port' in server_conf else 8000
 
     logger.info("The MAST Unit server is starting ...")
 
-    uvicorn.run(app, host="0.0.0.0", port=port,log_level=log_level)
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
