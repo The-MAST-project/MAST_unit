@@ -13,7 +13,7 @@ from threading import Thread
 from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH
 from common.utils import path_maker, image_to_fits, Component, CanonicalResponse
 from common.config import Config
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 
 from fastapi.routing import APIRouter
 
@@ -72,9 +72,11 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
             'temp_check_interval': 15,
         }
 
-        self.conf = Config().toml['camera']
+        self.unit_conf = Config().get_unit()
+        self.conf = self.unit_conf['camera']
         Component.__init__(self)
-        SwitchedPowerDevice.__init__(self, self.conf)
+        # SwitchedPowerDevice.__init__(self, conf=make_power_conf(self.unit_conf, 'Camera'))
+        SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Camera')
 
         if not self.is_on():
             self.power_on()

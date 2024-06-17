@@ -4,10 +4,10 @@ from enum import IntEnum, IntFlag, auto
 import datetime
 from typing import List
 
-from common.utils import RepeatTimer, init_log, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
 from mastapi import Mastapi
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 import os
 import sys
 import platform
@@ -78,11 +78,12 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     _positioning_precision: int = 100
 
     def __init__(self):
-        self.conf: dict = Config().toml['stage']
+        self.unit_conf: dict = Config().get_unit()
+        self.conf = self.unit_conf['stage']
         # logger: logging.Logger = logging.getLogger('mast.unit.stage')
         # init_log(logger)
 
-        SwitchedPowerDevice.__init__(self, self.conf)
+        SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Stage')
         Component.__init__(self)
 
         self.device = None
@@ -148,8 +149,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 self.device = dev
                 self.stage_lock = threading.Lock()
 
-        image_position = self.conf['ImagePosition']
-        spectra_position = self.conf['SpectraPosition']
+        image_position = self.conf['image_position']
+        spectra_position = self.conf['spectra_position']
 
         if self.device is not None:
             self.presets = {
@@ -288,7 +289,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         if self.detected:
             for k, v in self.presets.items():
                 presets[k.name] = v
-        ret = {
+        ret |= {
             'info': self.info,
             'presets': presets,
             'position': self.position if self.connected else None,
@@ -489,8 +490,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         return self._was_shut_down
 
 
-base_path = BASE_UNIT_PATH + "/mount"
-tag = 'Mount'
+base_path = BASE_UNIT_PATH + "/stage"
+tag = 'Stage'
 
 stage = Stage()
 

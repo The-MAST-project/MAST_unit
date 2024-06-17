@@ -7,9 +7,9 @@ import logging
 from PlaneWave import pwi4_client
 from typing import List
 from enum import IntFlag, auto
-from common.utils import init_log, Component, time_stamp, BASE_UNIT_PATH
+from common.utils import Component, time_stamp, BASE_UNIT_PATH
 from common.utils import RepeatTimer, CanonicalResponse
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 from common.config import Config
 from common.networking import NetworkedDevice
 from fastapi.routing import APIRouter
@@ -28,7 +28,7 @@ class MountActivities(IntFlag):
     FindingHome = auto()
 
 
-class Mount(Component, SwitchedPowerDevice, NetworkedDevice, AscomDispatcher):
+class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -45,11 +45,10 @@ class Mount(Component, SwitchedPowerDevice, NetworkedDevice, AscomDispatcher):
         return self._ascom
 
     def __init__(self):
-        self.conf: dict = Config().toml['mount']
-
-        SwitchedPowerDevice.__init__(self, self.conf)
+        self.unit_conf: dict = Config().get_unit()
+        self.conf = self.unit_conf['mount']
+        SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Mount')
         Component.__init__(self)
-        NetworkedDevice.__init__(self, self.conf)
 
         if not self.is_on():
             self.power_on()
@@ -294,7 +293,7 @@ class Mount(Component, SwitchedPowerDevice, NetworkedDevice, AscomDispatcher):
         if not self.is_on():
             ret.append(f"{label}: not powered")
         elif not self.detected:
-            ret.append(f"{label}: not detected")
+            ret.append(f"{label}: (PWI4) not detected")
         elif self.was_shut_down:
             ret.append(f"{label}: shut down")
         else:

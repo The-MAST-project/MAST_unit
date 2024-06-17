@@ -6,7 +6,7 @@ import win32com.client
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
 from PlaneWave import pwi4_client
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 from fastapi.routing import APIRouter
 
 logger = logging.getLogger('mast.unit.' + __name__)
@@ -39,14 +39,15 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         return cls._instance
 
     def __init__(self):
-        self.conf = Config().toml['focuser']
+        self.unit_conf = Config().get_unit()
+        self.conf = self.unit_conf['focuser']
         try:
             self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
         except Exception as ex:
             logger.exception(ex)
             raise ex
 
-        SwitchedPowerDevice.__init__(self, self.conf)
+        SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Focuser')
         Component.__init__(self)
 
         if not self.is_on():

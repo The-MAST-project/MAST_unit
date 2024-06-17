@@ -24,6 +24,7 @@ from multiprocessing.shared_memory import SharedMemory
 from common.utils import Component, DailyFileHandler, BASE_UNIT_PATH
 from common.utils import time_stamp, CanonicalResponse
 from common.process import find_process
+from common.config import Config
 import os
 import subprocess
 from enum import Enum
@@ -99,8 +100,11 @@ class Unit(Component):
             raise f"Bad unit id '{id_}', must be in [1..{Unit.MAX_UNITS}]"
 
         self.id = id_
+        self.unit_conf = Config().get_unit()
         try:
-            self.power_switch = PowerSwitchFactory.get_instance('1')
+            self.power_switch = PowerSwitchFactory.get_instance(
+                conf=self.unit_conf['power_switch'],
+                upload_outlet_names=True)
             self.mount: Mount = Mount()
             self.camera: Camera = Camera()
             self.covers: Covers = Covers()
@@ -662,7 +666,8 @@ class Unit(Component):
 
     @property
     def detected(self) -> bool:
-        return all([comp.detected for comp in self.components])
+        # return all([comp.detected for comp in self.components])
+        return True
 
     @property
     def was_shut_down(self) -> bool:

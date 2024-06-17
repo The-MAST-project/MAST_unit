@@ -7,7 +7,7 @@ from typing import List
 
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
 from common.config import Config
-from dlipower.dlipower.dlipower import SwitchedPowerDevice
+from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 from fastapi.routing import APIRouter
 
 logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
@@ -54,7 +54,8 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         return logger
 
     def __init__(self):
-        self.conf: dict = Config().toml['covers']
+        self.unit_conf: dict = Config().get_unit()
+        self.conf = self.unit_conf['covers']
         try:
             self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
         except Exception as ex:
@@ -62,7 +63,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
             logger.exception(ex)
             raise ex
 
-        SwitchedPowerDevice.__init__(self, self.conf)
+        SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Covers')
         Component.__init__(self)
 
         if not self.is_on():
@@ -246,7 +247,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.is_on():
             ret.append(f"{self.name}: not powered")
         elif not self.detected:
-            ret.append(f"{self.name}: not detected")
+            ret.append(f"{self.name}: (ASCOM) not detected")
         else:
             if not self.ascom:
                 ret.append(f"{self.name}: (ASCOM) - no handle")
