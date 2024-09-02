@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="MAST-unit" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="MAST-unit" type="PythonConfigurationType" factoryName="Python" focusToolWindowBeforeRun="true">
     <module name="mast" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />

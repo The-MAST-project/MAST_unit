@@ -30,7 +30,7 @@ def make_parameters(method_name, method, docstring) -> list:
         TypeToSchema(str, {'type': 'string'}),
         TypeToSchema(Union[int, str], {'type': 'number', 'format': 'int32'}),
         TypeToSchema(Union[float, str], {'type': 'number', 'format': 'float'}),
-        TypeToSchema(Union[stage.PresetPosition, str], {'type': 'string', 'enum':
+        TypeToSchema(Union[stage.StagePresetPosition, str], {'type': 'string', 'enum':
             ['Image', 'Spectra', 'Min', 'Max', 'Middle']}),
         TypeToSchema(Union[stage.StageDirection, str], {'type': 'string', 'enum': ['Up', 'Down']}),
     ]

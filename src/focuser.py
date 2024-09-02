@@ -3,15 +3,14 @@ import logging
 from enum import IntFlag, IntEnum, auto
 import win32com.client
 
-from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH
 from common.config import Config
 from PlaneWave import pwi4_client
-from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
+from common.ascom import ascom_run, AscomDispatcher
 
 logger = logging.getLogger('mast.unit.' + __name__)
-
-from common.ascom import ascom_run, AscomDispatcher
 
 
 class FocuserActivities(IntFlag):
@@ -27,11 +26,13 @@ class FocusDirection(IntEnum):
 
 
 class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
+
+    _instance = None
+    _initialized = False
+
     @property
     def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
-
-    _instance = None
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -39,6 +40,9 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         return cls._instance
 
     def __init__(self):
+        if self._initialized:
+            return
+
         self.unit_conf = Config().get_unit()
         self.conf = self.unit_conf['focuser']
         try:
@@ -69,12 +73,14 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             self.conf['known_as_good_position'] if 'known_as_good_position' in self.conf \
             else (self.upper_limit / 2) if self.upper_limit \
             else None
+        logger.info(f"focuser: known_as_good_position: {self.known_as_good_position}")
 
         self._was_shut_down = False
         self.timer: RepeatTimer = RepeatTimer(2, function=self.ontimer)
         self.timer.name = 'focuser-timer-thread'
         self.timer.start()
 
+        self._initialized = True
         logger.info('initialized')
 
     def startup(self):
@@ -87,9 +93,9 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             self.connect()
         self.pw.focuser_enable()
         self._was_shut_down = False
-        if self.known_as_good_position is not None:
-            self.goto(self.known_as_good_position)
-        return CanonicalResponse.ok
+        if self.known_as_good_position is not None and self.position != self.known_as_good_position:
+            self.position = self.known_as_good_position
+        return CanonicalResponse_Ok
 
     def shutdown(self):
         """
@@ -101,7 +107,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         if self.is_on():
             self.power_off()
         self._was_shut_down = True
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def connect(self):
         """
@@ -117,14 +123,14 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             self.connected = False
         else:
             self.connected = True
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def disconnect(self):
         """
         :mastapi:
         """
         self.connected = False
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     @property
     def connected(self):
@@ -146,14 +152,30 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         #         logger.error(f"failed to connect (failure='{response.failure}')")
 
     @property
-    def position(self):
+    def position(self) -> int:
         """
         :mastapi:
         """
         stat = self.pw.status()
         return round(stat.focuser.position)
 
-    def goto(self, position: int | str):
+    @position.setter
+    def position(self, value: int):
+        if not self.is_on() or not self.connected:
+            logger.error(f'Cannot goto {value} - not-powered or not-connected')
+            return
+
+        if self.close_enough(value):
+            logger.info(f"at {self.position=} (close enough to {value=})")
+        else:
+            self.target = value
+            self.start_activity(FocuserActivities.Moving)
+            self.pw.focuser_goto(value)
+
+    def close_enough(self, position):
+        return abs(self.position - position) <= 1
+
+    def set_position(self, position: int | str):
         """
         Sends the focuser to the specified position
 
@@ -164,31 +186,25 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
 
         :mastapi:
         """
-        if not self.is_on():
-            logger.error(f'Cannot goto {position} - not-powered')
-            return CanonicalResponse(errors='not powered')
-        if not self.connected:
-            logger.error(f'Cannot goto {position} - not-connected')
-            return CanonicalResponse(errors='not connected')
 
         if isinstance(position, str):
             position = int(position)
-        st = self.pw.status()
-        if st.focuser.position == position:
-            logger.info(f"already at {position=}")
-        else:
-            self.target = position
-            self.start_activity(FocuserActivities.Moving)
-            self.pw.focuser_goto(position)
-        return CanonicalResponse.ok
+        self.position = position
+        return CanonicalResponse_Ok
 
     def goto_known_as_good_position(self):
         """
         Go to the 'known-as-good' position
         :mastapi:
         """
-        self.goto(self.known_as_good_position)
-        return CanonicalResponse.ok
+        self.position = self.known_as_good_position
+        return CanonicalResponse_Ok
+
+    def move_in(self, amount):
+        self.move(amount, direction=FocusDirection.In)
+
+    def move_out(self, amount):
+        self.move(amount, direction=FocusDirection.Out)
 
     def move(self, amount: int, direction: FocusDirection):
         """
@@ -217,8 +233,8 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
                 logger.error(msg)
                 return CanonicalResponse(errors=msg)
 
-        self.goto(position=target)
-        return CanonicalResponse.ok
+        self.position = target
+        return CanonicalResponse_Ok
 
     def abort(self):
         """
@@ -235,11 +251,11 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
 
         if self.is_active(FocuserActivities.StartingUp):
             self.end_activity(FocuserActivities.StartingUp)
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def ontimer(self):
 
-        if self.is_active(FocuserActivities.Moving) and self.position == self.target:
+        if self.is_active(FocuserActivities.Moving) and self.close_enough(self.target):
             self.end_activity(FocuserActivities.Moving)
             self.target = None
 
@@ -262,6 +278,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             'known_as_good_position': self.known_as_good_position,
             'position': self.position,
             'target': self.target,
+            'target_verbal': f"{self.target}",
             'moving': is_moving,
         }
         time_stamp(ret)
@@ -307,6 +324,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
 def get_position():
     return focuser.position
 
+
 base_path = BASE_UNIT_PATH + "/focuser"
 tag = 'Focuser'
 
@@ -320,7 +338,9 @@ router.add_api_route(base_path + '/status', tags=[tag], endpoint=focuser.status)
 router.add_api_route(base_path + '/connect', tags=[tag], endpoint=focuser.connect)
 router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=focuser.disconnect)
 router.add_api_route(base_path + '/position', tags=[tag], endpoint=get_position)
-router.add_api_route(base_path + '/goto', tags=[tag], endpoint=focuser.goto)
+router.add_api_route(base_path + '/position', methods=['PUT'], tags=[tag], endpoint=focuser.set_position)
 router.add_api_route(base_path + '/goto_known_as_good_position', tags=[tag],
                      endpoint=focuser.goto_known_as_good_position)
 router.add_api_route(base_path + '/move', tags=[tag], endpoint=focuser.move)
+router.add_api_route(base_path + '/move_in', tags=[tag], endpoint=focuser.move_in)
+router.add_api_route(base_path + '/move_out', tags=[tag], endpoint=focuser.move_out)

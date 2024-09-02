@@ -1,13 +1,14 @@
 import logging
 import threading
+import time
 from enum import IntEnum, IntFlag, auto
 import datetime
 from typing import List
 
-from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH, function_name
 from common.config import Config
 from mastapi import Mastapi
-from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 import os
 import sys
 import platform
@@ -45,20 +46,21 @@ class StageDirection(IntEnum):
     Down = auto()
 
 
-class PresetPosition(IntEnum):
-    Image = auto(),
-    Spectra = auto(),
+class StagePresetPosition(IntEnum):
+    Sky = auto(),
+    Spec = auto(),
     Min = auto(),
     Middle = auto(),
     Max = auto(),
+    StartUp = Sky
 
 
 stage_position_str2int_dict: dict = {
-    'Min': PresetPosition.Min,
-    'Max': PresetPosition.Max,
-    'Middle': PresetPosition.Middle,
-    'Image': PresetPosition.Image,
-    'Spectra': PresetPosition.Spectra,
+    'Min': StagePresetPosition.Min,
+    'Max': StagePresetPosition.Max,
+    'Middle': StagePresetPosition.Middle,
+    'Sky': StagePresetPosition.Sky,
+    'Spec': StagePresetPosition.Spec,
 }
 
 stage_direction_str2int_dict: dict = {
@@ -69,6 +71,7 @@ stage_direction_str2int_dict: dict = {
 
 class Stage(Mastapi, Component, SwitchedPowerDevice):
     _instance = None
+    _initialized = False
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -78,14 +81,16 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
     _positioning_precision: int = 100
 
     def __init__(self):
+        if self._initialized:
+            return
+
         self.unit_conf: dict = Config().get_unit()
         self.conf = self.unit_conf['stage']
-        # logger: logging.Logger = logging.getLogger('mast.unit.stage')
-        # init_log(logger)
 
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Stage')
         Component.__init__(self)
 
+        self.errors: List[str] = []
         self.device = None
         self.ticks_at_start: int | None = None
         self.ticks_at_target: int | None = None
@@ -96,7 +101,6 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.is_moving: bool = False
         self.target: int | None = None
         self.stage_lock: threading.Lock | None = None
-        self.presets: dict
         self.min_travel: int | None = None
         self.max_travel: int | None = None
 
@@ -105,80 +109,91 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         if not self.is_on():
             self.power_on()
+            time.sleep(3)
+
+        self.presets = {
+            StagePresetPosition.Sky: self.conf['presets']['sky'],
+            StagePresetPosition.Spec: self.conf['presets']['spec']
+            }
 
         # This is device search and enumeration with probing. It gives more information about devices.
         probe_flags = EnumerateFlags.ENUMERATE_PROBE | EnumerateFlags.ENUMERATE_ALL_COM
         enum_hints = b"addr="
         dev_enum = ximclib.enumerate_devices(probe_flags, enum_hints)
-        self.presets = {}
 
+        self.device = -1
         dev_count = ximclib.get_device_count(dev_enum)
-        if dev_count > 0:
-            self.device_uri = ximclib.get_device_name(dev_enum, 0)
-            dev = ximclib.open_device(self.device_uri)
-            if dev != -1:
-                x_device_information = device_information_t()
-                result = ximclib.get_device_information(dev, byref(x_device_information))
-                x_edges_settings = edges_settings_t()
-                result1 = ximclib.get_edges_settings(dev, byref(x_edges_settings))
-                if result == Result.Ok and result1 == Result.Ok:
-                    comport = str(self.device_uri)
-                    comport = comport[comport.find('COM'):]
-                    self.min_travel = x_edges_settings.LeftBorder
-                    self.max_travel = x_edges_settings.RightBorder
+        if dev_count == 0:
+            logger.error(f"stage.__init__: no device detected ({dev_count=})")
+            return
 
-                    self.info['port'] = comport
-                    self.info['controller'] = repr(string_at(x_device_information.Manufacturer).decode())
-                    self.info['product'] = repr(string_at(x_device_information.ProductDescription).decode())
-                    self.info['version'] = (f"{repr(x_device_information.Major)}.{repr(x_device_information.Minor)}" +
-                                            f".{repr(x_device_information.Release)}")
-                    self.info['travel'] = {
-                        'min': self.min_travel,
-                        'max': self.max_travel,
-                    }
+        self.device_uri = ximclib.get_device_name(dev_enum, 0)
+        ximclib.free_enumerate_devices(dev_enum)
+        self.device = ximclib.open_device(self.device_uri)
 
-                    self.device_info = "Port: {}, Manufacturer={}, Product={}, Version={}, Range={}..{}".format(
-                        comport,
-                        self.info['controller'],
-                        self.info['product'],
-                        self.info['version'],
-                        self.min_travel,
-                        self.max_travel,
-                    )
-                # ximclib.close_device(byref(cast(dev, POINTER(c_int))))
-                self.device = dev
-                self.stage_lock = threading.Lock()
+        if not self.detected:
+            logger.error(f"no device detected ({self.device=}")
+            return
 
-        image_position = self.conf['image_position']
-        spectra_position = self.conf['spectra_position']
+        x_device_information = device_information_t()
+        result = ximclib.get_device_information(self.device, byref(x_device_information))
+        x_edges_settings = edges_settings_t()
+        result1 = ximclib.get_edges_settings(self.device, byref(x_edges_settings))
+        if result == Result.Ok and result1 == Result.Ok:
+            comport = str(self.device_uri)
+            comport = comport[comport.find('COM'):]
+            self.min_travel = x_edges_settings.LeftBorder
+            self.max_travel = x_edges_settings.RightBorder
 
-        if self.device is not None:
-            self.presets = {
-                PresetPosition.Min: self.min_travel,
-                PresetPosition.Max: self.max_travel,
-                PresetPosition.Middle: int((self.max_travel - self.min_travel) / 2),
-                PresetPosition.Image: image_position,
-                PresetPosition.Spectra: spectra_position,
+            self.info['port'] = comport
+            self.info['controller'] = repr(string_at(x_device_information.Manufacturer).decode()).replace("'", '')
+            self.info['product'] = repr(string_at(x_device_information.ProductDescription).decode()).replace("'", '')
+            self.info['version'] = (f"{repr(x_device_information.Major)}.{repr(x_device_information.Minor)}" +
+                                    f".{repr(x_device_information.Release)}")
+            self.info['travel'] = {
+                'min': self.min_travel,
+                'max': self.max_travel,
             }
 
-            # get initial values from the hardware
-            hw_status = status_t()
-            with self.stage_lock:
-                result = ximclib.get_status(self.device, byref(hw_status))
-            if result == Result.Ok:
-                self._position = hw_status.CurPosition
-                self.is_moving = hw_status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
+            self.device_info = "Port: {}, Manufacturer={}, Product={}, Version={}, Range={}..{}".format(
+                comport,
+                self.info['controller'],
+                self.info['product'],
+                self.info['version'],
+                self.min_travel,
+                self.max_travel,
+            )
+        self.stage_lock = threading.Lock()
 
-            self.timer = RepeatTimer(2, function=self.ontimer)
-            self.timer.name = 'stage-timer-thread'
-            self.timer.start()
-            logger.info(f'initialized ({self.device_info})')
-        else:
-            logger.error(f"no device detected")
+        self.presets[StagePresetPosition.Min] = self.min_travel
+        self.presets[StagePresetPosition.Max] = self.max_travel
+        self.presets[StagePresetPosition.Middle] = int((self.max_travel - self.min_travel) / 2)
+
+        # get initial values from the hardware
+        hw_status = status_t()
+        with self.stage_lock:
+            result = ximclib.get_status(self.device, byref(hw_status))
+        if result == Result.Ok:
+            self._position = hw_status.CurPosition
+            self.is_moving = hw_status.MvCmdSts & MvcmdStatus.MVCMD_RUNNING
+
+        self.timer = RepeatTimer(2, function=self.ontimer)
+        self.timer.name = 'stage-timer-thread'
+        self.timer.start()
+
+        self._initialized = True
+        logger.info(f'initialized ({self.device_info})')
+
+    def __del__(self):
+        logger.info(f"Closing {self.device=}")
+        ximclib.close_device(byref(cast(self.device, POINTER(c_int))))
+
+    def __repr__(self):
+        return f"<Stage device={self.device}>"
 
     @property
     def connected(self) -> bool:
-        return self.device is not None
+        return self.detected
 
     @connected.setter
     def connected(self, value):
@@ -187,11 +202,10 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             return
 
         if value:
-            dev = ximclib.open_device(self.device_uri)
-            self.device = dev if dev != -1 else None
+            self.device = ximclib.open_device(self.device_uri)
         else:
             ximclib.close_device(byref(cast(self.device, POINTER(c_int))))
-            self.device = None
+            self.device = -1
 
         logger.info(f'connected = {value} => {self.connected}')
 
@@ -205,7 +219,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         if not self.is_on():
             self.power_on()
         self.connected = True
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def disconnect(self):
         """
@@ -216,7 +230,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         if self.is_on():
             self.connected = False
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def startup(self):
         """
@@ -233,10 +247,10 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         if not self.connected:
             self.connect()
         self._was_shut_down = False
-        if self.at_preset != 'Spectra':
+        if not self.at_preset(StagePresetPosition.Sky):
             self.start_activity(StageActivities.StartingUp)
-            self.move_to_preset(PresetPosition.Spectra)
-        return CanonicalResponse.ok
+            self.move_to_preset(StagePresetPosition.Sky)
+        return CanonicalResponse_Ok
 
     def shutdown(self):
         """
@@ -247,16 +261,15 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.disconnect()
         self.power_off()
         self._was_shut_down = True
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
-    @property
-    def at_preset(self) -> str | None:
+    def at_preset(self, preset: StagePresetPosition) -> bool:
         current_position = self.position
         if current_position is not None:
-            for preset, pos in self.presets.items():
-                if self.close_enough(pos):
-                    return preset.name
-        return None
+            for p in self.presets:
+                if p == preset and self.close_enough(self.presets[p]):
+                    return True
+        return False
 
     @property
     def position(self) -> int | None:
@@ -285,26 +298,40 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         :mastapi:
         """
         ret = self.power_status() | self.component_status()
+        at_preset = None
         presets = {}
+        for k, v in self.presets.items():
+            presets[k.name] = v
+
         if self.detected:
-            for k, v in self.presets.items():
-                presets[k.name] = v
+            for k in self.presets.keys():
+                if self.close_enough(self.presets[k]):
+                    at_preset = k.name
+                    break
+
+        target_verbal = f"{self.target}"
+        if self.target is not None:
+            for preset in self.presets:
+                if self.target == preset.value:
+                    target_verbal = preset.name
+                    break
+
         ret |= {
             'info': self.info,
             'presets': presets,
             'position': self.position if self.connected else None,
-            'at_preset': self.at_preset,
+            'at_preset': at_preset,
+            'target': self.target,
+            'target_verbal': target_verbal
         }
         time_stamp(ret)
         return ret
 
     def close_enough(self, target):
-        if self._position is None or target is None:
-            print(f"close_enough: {self._position=}, {target=}")
-        return abs(self._position - target) <= 2
+        return abs(self._position - target) <= 1
 
     def ontimer(self):
-        if not self.connected:
+        if not self.detected or not self.stage_lock:
             return
 
         hw_status = status_t()
@@ -316,14 +343,15 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         if not self.is_moving:
             if self.is_active(StageActivities.Moving) and self.close_enough(self.target):
+                self.target = None
                 self.end_activity(StageActivities.Moving)
 
             if (self.is_active(StageActivities.StartingUp) and
-                    self.close_enough(self.presets[PresetPosition.Spectra])):
+                    self.close_enough(self.presets[StagePresetPosition.StartUp])):
                 self.end_activity(StageActivities.StartingUp)
 
     #
-    def move_to_preset(self, preset: PresetPosition | str):
+    def move_to_preset(self, preset: StagePresetPosition | str):
         """
         Starts moving the stage to one of the preset positions
 
@@ -339,73 +367,56 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
         if isinstance(preset, str):
             try:
-                preset = PresetPosition.__getitem__(preset)
+                preset = StagePresetPosition.__getitem__(preset)
             except KeyError:
                 logger.warning(f"No such preset position '{preset}'")
                 return
 
         preset_position = self.presets[preset]
         if self.close_enough(preset_position):
-            logger.info(f'Not moving (current position:{self.position}) close enough to {preset_position})')
+            logger.info(f'Not moving {self.position=} is close enough to {preset_position=}')
             return
 
-        self.target = preset_position
-        self.start_activity(StageActivities.Moving)
+        return self.move_absolute(preset_position)
+
+    def move_absolute(self, position: int | str):
+        op = function_name()
+
+        if not self.detected:
+            return CanonicalResponse(errors=['not detected'])
+        if not self.connected:
+            return CanonicalResponse(errors=['not connected'])
+
+        if isinstance(position, str):
+            position = int(position)
+
+        if self.close_enough(position):
+            logger.info(f'{op}: Not moving {self.position=} is close enough to {position=}')
+            return
+
+        if not (self.min_travel <= position < self.max_travel):
+            return CanonicalResponse(errors=[f"out of range: {self.min_travel} <= position < {self.max_travel}"])
+        try:
+            with self.stage_lock:
+                response = ximclib.command_move(self.device, position, 0)
+                if response != Result.Ok:
+                    msg = f'Failed to start stage move absolute (command_move({self.device}, {position})'
+                    logger.error(f"{op}: " + msg)
+                    return CanonicalResponse(errors=msg)
+        except Exception as ex:
+            msg = f'Failed to start stage move absolute (command_move({self.device}, {position})'
+            logger.exception(f"{op}: " + msg, ex)
+            return CanonicalResponse(exception=ex)
 
         self.ticks_at_start = self.position
+        self.target = position
         self.motion_start_time = datetime.datetime.now()
-        logger.info(f'move: at {self.position} started moving to {self.target}')
+        logger.info(f'{op}: move: at {self.position=}, moving to {self.target=}')
+        self.start_activity(StageActivities.Moving)
 
-        try:
-            with self.stage_lock:
-                response = ximclib.command_move(self.device, self.target, 0)
-            if response != Result.Ok:
-                self.target = None
-                msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
-                logger.error(msg)
-                return CanonicalResponse(errors=msg)
-        except Exception as ex:
-            self.target = None
-            msg = f'Failed to start stage move (command_move({self.device}, {self.target}, 0)'
-            logger.exception(msg, ex)
-            return CanonicalResponse(exception=ex)
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
-    def move_microns(self, direction: StageDirection | str, microns: int | str):
-        """
-        Starts moving the stage in the specified direction by the specified number of microns
-
-        Parameters
-        ----------
-        direction
-            The direction to move (**Up**: away from the motor, **Down**: towards the motor)
-        microns
-            How many microns to move
-        :mastapi:
-        """
-
-        if isinstance(direction, str):
-            direction = StageDirection(stage_direction_str2int_dict[direction])
-        if isinstance(microns, str):
-            microns = abs(int(microns))
-
-        microns *= 1 if direction == StageDirection.Up else -1
-        try:
-            self.target = self.position + microns
-            self.start_activity(StageActivities.Moving)
-            with self.stage_lock:
-                response = ximclib.command_movr(self.device, microns, 0)
-            if response != Result.Ok:
-                msg = f'Failed to start stage move (command_movr({self.device}, {microns})'
-                logger.error(msg)
-                return CanonicalResponse(errors=msg)
-        except Exception as ex:
-            msg = f'Failed to start stage move relative (command_movr({self.device}, {microns})'
-            logger.exception(msg, ex)
-            return CanonicalResponse(exception=ex)
-        return CanonicalResponse.ok
-
-    def move_native(self, direction: StageDirection | str, amount: int | str):
+    def move_relative(self, direction: StageDirection | str, amount: int | str):
         """
         Starts moving the stage in the specified direction by the specified number of native units
 
@@ -417,6 +428,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
             How many units to move
         :mastapi:
         """
+        op = function_name()
 
         if isinstance(direction, str):
             direction = StageDirection(stage_direction_str2int_dict[direction])
@@ -431,13 +443,13 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 response = ximclib.command_movr(self.device, amount, 0)
             if response != Result.Ok:
                 msg = f'Failed to start stage move (command_movr({self.device}, {amount})'
-                logger.error(msg)
+                logger.error(f"{op}: " + msg)
                 return CanonicalResponse(errors=msg)
         except Exception as ex:
             msg = f'Failed to start stage move relative (command_movr({self.device}, {amount})'
-            logger.exception(msg, ex)
+            logger.exception(f"{op}: " + msg, ex)
             return CanonicalResponse(exception=ex)
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def abort(self):
         """
@@ -453,7 +465,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
                 self.end_activity(activity)
 
         ximclib.command_stop(self.device)
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     @property
     def name(self) -> str:
@@ -461,8 +473,8 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
 
     @property
     def operational(self) -> bool:
-        return all([self.is_on(), self.device, self.connected, not self.was_shut_down,
-                    (self.at_preset == 'Spectra' or self.at_preset == 'Image')])
+        return all([self.is_on(), self.detected, self.connected, not self.was_shut_down,
+                    (self.at_preset(StagePresetPosition.Spec) or self.at_preset(StagePresetPosition.Sky))])
 
     @property
     def why_not_operational(self) -> List[str]:
@@ -471,19 +483,19 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         if not self.is_on():
             ret.append(f"{label}: not powered")
         else:
-            if not self.device:
+            if not self.detected:
                 ret.append(f"{label}: not detected")
             if self.was_shut_down:
                 ret.append(f"{label}: shut down")
             if not self.connected:
                 ret.append(f"{label}: not connected")
-            elif not (self.at_preset == 'Spectra' or self.at_preset == 'Image'):
-                ret.append(f"not at 'Spectra' or 'Image' preset positions")
+            elif not (self.at_preset(StagePresetPosition.Spec) or self.at_preset(StagePresetPosition.Sky)):
+                ret.append(f"not at 'Spec' or 'Sky' preset positions")
         return ret
 
     @property
     def detected(self) -> bool:
-        return self.device is not None
+        return self.device != -1
 
     @property
     def was_shut_down(self) -> bool:
@@ -495,13 +507,24 @@ tag = 'Stage'
 
 stage = Stage()
 
+
+def get_position() -> int:
+    return stage.position
+
+
+def set_position(pos: int):
+    stage.position = pos
+    return CanonicalResponse_Ok
+
+
 router = APIRouter()
 router.add_api_route(base_path + '/startup', tags=[tag], endpoint=stage.startup)
 router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=stage.shutdown)
 router.add_api_route(base_path + '/abort', tags=[tag], endpoint=stage.abort)
 router.add_api_route(base_path + '/status', tags=[tag], endpoint=stage.status)
+router.add_api_route(base_path + '/position', tags=[tag], endpoint=get_position)
+router.add_api_route(base_path + '/position', methods=['PUT'], tags=[tag], endpoint=set_position)
 router.add_api_route(base_path + '/connect', tags=[tag], endpoint=stage.connect)
 router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=stage.disconnect)
-router.add_api_route(base_path + '/move_native', tags=[tag], endpoint=stage.move_native)
-router.add_api_route(base_path + '/move_microns', tags=[tag], endpoint=stage.move_microns)
+router.add_api_route(base_path + '/move', tags=[tag], endpoint=stage.move_relative)
 router.add_api_route(base_path + '/move_to_preset', tags=[tag], endpoint=stage.move_to_preset)

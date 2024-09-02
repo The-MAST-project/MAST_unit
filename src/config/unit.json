@@ -24,7 +24,7 @@
 
   "focuser": {
     "ascom_driver": "ASCOM.PWI4.Focuser",
-    "known_as_good_position": 15000
+    "known_as_good_position": 33400
   },
 
   "covers": {

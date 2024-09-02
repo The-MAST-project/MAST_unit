@@ -5,7 +5,7 @@ import logging
 from enum import IntFlag, Enum, auto
 from typing import List
 
-from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, BASE_UNIT_PATH
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH
 from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 from fastapi.routing import APIRouter
@@ -35,6 +35,7 @@ class CoversState(Enum):
 
 class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
     _instance = None
+    _initialized = False
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -54,6 +55,9 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         return logger
 
     def __init__(self):
+        if self._initialized:
+            return
+
         self.unit_conf: dict = Config().get_unit()
         self.conf = self.unit_conf['covers']
         try:
@@ -66,8 +70,8 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Covers')
         Component.__init__(self)
 
-        if not self.is_on():
-            self.power_on()
+        # if not self.is_on():
+        #     self.power_on()
 
         self.timer: RepeatTimer = RepeatTimer(2, self.ontimer)
         self.timer.name = 'covers-timer-thread'
@@ -76,6 +80,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         self._connected: bool = False
         self._was_shut_down = False
 
+        self._initialized = True
         logger.info('initialized')
 
     def connect(self):
@@ -90,7 +95,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
             self._connected = False
         else:
             self._connected = True
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def disconnect(self):
         """
@@ -98,7 +103,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         :mastapi:
         """
         self.connected = False
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     @property
     def connected(self):
@@ -130,10 +135,17 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         """
         :mastapi:
         """
+        target_verbal = None
+        if self.is_active(CoverActivities.Opening):
+            target_verbal = "Open"
+        elif self.is_active(CoverActivities.Closing):
+            target_verbal = "Closed"
+
         ret = self.power_status() | self.ascom_status() | self.component_status()
         ret |= {
             'state': self.state,
             'state_verbal': self.state.__repr__(),
+            'target_verbal': target_verbal,
         }
         time_stamp(ret)
         return ret
@@ -152,7 +164,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         response = ascom_run(self, 'OpenCover()')
         if response.failed:
             logger.error(f"failed to open covers (failure='{response.failure}')")
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def close(self):
         """
@@ -167,7 +179,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         response = ascom_run(self, 'CloseCover()')
         if response.failed:
             logger.error(f"failed to close covers (failure='{response.failure}')")
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def startup(self):
         """
@@ -183,7 +195,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         if self.connected and self.state != CoversState.Open:
             self.start_activity(CoverActivities.StartingUp)
             self.open()
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def shutdown(self):
         """
@@ -198,7 +210,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         if self.state != CoversState.Closed:
             self.start_activity(CoverActivities.ShuttingDown)
             self.close()
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def abort(self):
         """
@@ -214,7 +226,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
                          CoverActivities.Closing, CoverActivities.Opening):
             if self.is_active(activity):
                 self.end_activity(activity)
-        return CanonicalResponse.ok
+        return CanonicalResponse_Ok
 
     def ontimer(self):
         if not self.connected:

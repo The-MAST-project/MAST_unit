@@ -4,7 +4,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from PlaneWave import pwi4_client
-from common.utils import init_log
+from common.utils import init_log, BASE_UNIT_PATH, PathMaker
 import logging
 from contextlib import asynccontextmanager
 import psutil
@@ -13,21 +13,24 @@ from fastapi.responses import RedirectResponse, ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 from common.process import ensure_process_is_running
 from common.config import Config
+from fastapi import WebSocket, WebSocketDisconnect
 
 #
 # Log level configuration from the 'global' section of the 'config' file
 #
 unit_conf = Config().get_unit(socket.gethostname())
 
-if 'log_level' in unit_conf['global']:
-    log_level = getattr(logging, unit_conf['global']['log_level'].upper())
-else:
-    log_level = logging.WARNING
+# if 'log_level' in unit_conf['global']:
+#     log_level = getattr(logging, unit_conf['global']['log_level'].upper())
+# else:
+log_level = logging.DEBUG
 logging.basicConfig(level=log_level)
 logger = logging.getLogger('mast.unit')
-init_log(logger, level=log_level, file_name='mast-unit')
+init_log(logger, level=log_level, file_name='unit-log')
 
-logger.info('Starting ...')
+logger.info('+--------------+')
+logger.info('| Starting ... |')
+logger.info('+--------------+')
 
 if 'http_proxy' in os.environ:
     del os.environ['http_proxy']
@@ -42,6 +45,7 @@ def app_quit():
     parent_pid = os.getpid()
     parent = psutil.Process(parent_pid)
     for child in parent.children(recursive=True):  # or parent.children() for recursive=False
+        logger.info(f"killing process {child.pid=}, '{child.name()}'")
         child.kill()
     parent.kill()
 
@@ -52,6 +56,16 @@ ensure_process_is_running(name='PWI4.exe',
 ensure_process_is_running(name='PWShutter.exe',
                           cmd="C:\\Program Files (x86)\\PlaneWave Instruments\\" +
                               "PlaneWave Shutter Control\\PWShutter.exe",
+                          logger=logger,
+                          shell=True)
+
+# daily_folder = PathMaker().make_daily_folder_name()
+# os.makedirs(daily_folder, exist_ok=True)
+# solver_stdout_file = os.path.join(daily_folder, 'solver-stdout.txt')
+# solver_stderr_file = os.path.join(daily_folder, 'solver-stderr.txt')
+ensure_process_is_running(name='ps3cli-20240829.exe',
+                          cwd='C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli',
+                          cmd=f'ps3cli-20240829.exe --server --port=9896',
                           logger=logger,
                           shell=True)
 
@@ -84,6 +98,11 @@ async def lifespan(fast_app: FastAPI):
     unit.end_lifespan()
 
 
+async def websocket_disconnect_handler(websocket: WebSocket, exc: WebSocketDisconnect):
+    logger.info(f"websocket disconnected: {exc.code}")
+    await websocket.close()
+
+
 app = FastAPI(
     docs_url='/docs',
     redocs_url=None,
@@ -91,7 +110,13 @@ app = FastAPI(
     openapi_url='/openapi.json',
     debug=True,
     default_response_class=ORJSONResponse,
+    # exception_handlers={WebSocketDisconnect: websocket_disconnect_handler},
 )
+
+# Configure logging for WebSocketProtocol
+# logging.basicConfig(level=logging.DEBUG)
+# logger = logging.getLogger("uvicorn.protocols.websockets.websockets_impl.WebSocketProtocol")
+# logger.setLevel(logging.DEBUG)
 
 app.add_middleware(
     CORSMiddleware,
@@ -101,6 +126,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# @app.websocket_route(BASE_UNIT_PATH + '/unit_visual_ws')
+# async def unit_visual_websocket(websocket: WebSocket):
+#     await unit.unit_visual_ws(websocket)
 
 app.include_router(unit_router)
 app.include_router(mount_router)
@@ -113,115 +143,6 @@ app.include_router(camera_router)
 @app.get("/favicon.ico")
 def read_favicon():
     return RedirectResponse(url="/static/favicon.ico")
-
-
-# subsystems = [
-#     Subsystem(path='unit', obj=unit, obj_name='unit'),
-#     Subsystem(path='mount', obj=unit.mount, obj_name='unit.mount'),
-#     Subsystem(path='focuser', obj=unit.focuser, obj_name='unit.focuser'),
-#     # Subsystem(path='camera', obj=unit.camera, obj_name='unit.camera'),
-#     Subsystem(path='stage', obj=unit.stage, obj_name='unit.stage'),
-#     Subsystem(path='covers', obj=unit.covers, obj_name='unit.covers'),
-#     Subsystem(path='planewave', obj=pw, obj_name='pw')
-# ]
-
-
-# def get_api_methods(subs):
-#     """
-#     Preliminary inspection of the API methods.
-#
-#     Per each defined subsystem:
-#     - For all methods tagged as Mastapi.is_api_method remember
-#         - The method name (used for calling it later)
-#         - The method object
-#         - The method object's __doc__
-#
-#     Parameters
-#     ----------
-#     subs
-#
-#     Returns
-#     -------
-#
-#     """
-#     for sub in subs:
-#         method_tuples = inspect.getmembers(sub.obj, inspect.ismethod)
-#         api_method_tuples = [t for t in method_tuples if Mastapi.is_api_method(t[1]) or
-#                              (sub.path == 'planewave' and not t[0].startswith('_'))]
-#         sub.method_names = [t[0] for t in api_method_tuples]
-#         sub.method_objects = [t[1] for t in api_method_tuples]
-#         for o in sub.method_objects:
-#             sub.method_docs = [o.__doc__.replace(':mastapi:\n', '').lstrip('\n').strip() if o.__doc__ else None]
-#
-#
-# make_openapi_schema(app=app, subsystems=subsystems)
-# get_api_methods(subs=subsystems)
-#
-#
-# @app.get(BASE_UNIT_PATH + '/{subsystem}/{method}')
-# async def do_item(subsystem: str, method: str, request: Request):
-#
-#     sub = [s for s in subsystems if s.path == subsystem]
-#     if len(sub) == 0:
-#         return f'Invalid MAST subsystem \'{subsystem}\', valid ones: {", ".join([x.path for x in subsystems])}'
-#
-#     sub = sub[0]
-#
-#     if method == 'quit':
-#         app_quit()
-#
-#     if method == 'help':
-#         responses = list()
-#         for i, obj in enumerate(sub.method_objects):
-#             responses.append(HelpResponse(sub.method_names[i], sub.method_docs[i]))
-#         return responses
-#
-#     if method not in sub.method_names:
-#         return CanonicalResponse(errors=f"Invalid method '{method}' for " +
-#                                         f"subsystem {subsystem}, valid ones: {", ".join(sub.method_names)}")
-#
-#     cmd = f'{sub.obj_name}.{method}('
-#     for k, v in request.query_params.items():
-#         cmd += f"{k}={quote(v)}, "
-#     cmd = cmd.removesuffix(', ') + ')'
-#
-#     try:
-#         ret = eval(cmd)
-#         ret = CanonicalResponse(value=ret)
-#     except Exception as e:
-#         ret = CanonicalResponse(exception=e)
-#
-#     return ret
-#
-#
-# @app.get(BASE_UNIT_PATH + '/{method}')
-# def do_unit(method: str, request: Request):
-#     sub = [s for s in subsystems if s.obj_name == 'unit']
-#     sub = sub[0]
-#     if method == 'quit':
-#         app_quit()
-#
-#     if method == 'help':
-#         responses = list()
-#         for i, obj in enumerate(sub.method_objects):
-#             responses.append(HelpResponse(sub.method_names[i], sub.method_docs[i]))
-#         return responses
-#
-#     if method not in sub.method_names:
-#         return f'Invalid method \'{method}\' for subsystem {sub.obj_name}, valid ones: {", ".join(sub.method_names)}'
-#
-#     cmd = f'{sub.obj_name}.{method}('
-#     for k, v in request.query_params.items():
-#         cmd += f"{k}={quote(v)}, "
-#     cmd = cmd.removesuffix(', ') + ')'
-#
-#     try:
-#         ret = eval(cmd)
-#         ret = CanonicalResponse(value=ret)
-#     except Exception as e:
-#         ret = CanonicalResponse(exception=e)
-#
-#     return ret
 
 
 if __name__ == "__main__":
