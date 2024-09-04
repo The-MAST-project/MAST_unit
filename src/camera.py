@@ -161,10 +161,9 @@ class ExposureSettings:
         tags = ''
         if self.tags:
             for k, v in self.tags.items():
-                tags += f"{k}" if v is None else f"{k}={v}" + ','
-        if tags != '':
-            tags = f",{tags}"
-        return f"{tags},seconds={self.seconds},binning={self.binning},gain={self.gain},roi={self.roi}.fits"
+                tags += (f"{k}" if v is None else f"{k}={v}") + ','
+
+        return f"{tags}seconds={self.seconds},binning={self.binning},gain={self.gain},roi={self.roi}.fits"
 
 
 class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
@@ -385,12 +384,15 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         if not self.connected:
             raise Exception(f"cannot set gain, not connected")
 
-        if self.GainMin > value > self.GainMax:
-            raise Exception(f"{value=} out of bounds [{self.GainMin=}, {self.GainMax=}]")
+        if self.GainMin is not None and self.GainMax is not None:
+            if self.GainMin > value > self.GainMax:
+                logger.error(f"Exception({value=} out of bounds [{self.GainMin=}, {self.GainMax=}]")
+                return
 
         response = ascom_run(self, f'Gain = {value}')
         if response.failed:
-            raise Exception(f"failed to set Gain to {value}, error(s): {response.failure}")
+            logger.error(f"Exception(failed to set Gain to {value}, error(s): {response.failure}")
+            return
         self._gain = value
 
     def connect(self):
@@ -444,6 +446,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         :mastapi:
         """
         op = function_name()
+        self.errors = []
 
         if not self._ascom:
             self.errors.append(f"{op}: no ASCOM handle")

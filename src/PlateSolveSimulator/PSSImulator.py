@@ -9,7 +9,7 @@ import os
 import logging
 import guiding
 import json
-from unit import GUIDING_SHM_NAME
+from unit import PLATE_SOLVING_SHM_NAME
 
 image_params_shm: SharedMemory | None = None
 image_shm: SharedMemory | None = None
@@ -113,7 +113,7 @@ if __name__ == '__main__':
     image_shm = None
     while not image_shm:
         try:
-            image_shm = SharedMemory(name=GUIDING_SHM_NAME)
+            image_shm = SharedMemory(name=PLATE_SOLVING_SHM_NAME)
         except FileNotFoundError:
             logger.info("Waiting for the shared memory segment (not found, sleeping 2) ...")
             sleep(2)

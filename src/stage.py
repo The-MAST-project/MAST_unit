@@ -411,7 +411,7 @@ class Stage(Mastapi, Component, SwitchedPowerDevice):
         self.ticks_at_start = self.position
         self.target = position
         self.motion_start_time = datetime.datetime.now()
-        logger.info(f'{op}: move: at {self.position=}, moving to {self.target=}')
+        logger.info(f'{op}: move: from {self.position=} to {self.target=}')
         self.start_activity(StageActivities.Moving)
 
         return CanonicalResponse_Ok

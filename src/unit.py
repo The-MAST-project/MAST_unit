@@ -6,12 +6,11 @@ import logging
 import socket
 
 import numpy as np
-import psutil
 
 import camera
 from PlaneWave import pwi4_client
 import time
-from typing import List, Any
+from typing import List, Any, NamedTuple
 from camera import Camera, CameraActivities, Binning, CameraRoi, ExposurePurpose, ExposureSettings
 from covers import Covers, CoverActivities
 from stage import Stage, StageActivities, StagePresetPosition
@@ -19,6 +18,7 @@ from mount import Mount, MountActivities
 from focuser import Focuser, FocuserActivities
 from dlipower.dlipower.dlipower import SwitchedPowerDevice, PowerSwitchFactory
 from astropy.coordinates import Angle
+import astropy.units as u
 from common.utils import RepeatTimer
 from enum import IntFlag, auto
 from threading import Thread
@@ -26,7 +26,6 @@ from multiprocessing.shared_memory import SharedMemory
 from common.utils import Component, DailyFileHandler, BASE_UNIT_PATH
 from common.utils import time_stamp, CanonicalResponse, CanonicalResponse_Ok, PathMaker, function_name, Filer
 from common.config import Config
-from common.process import find_process
 import subprocess
 from enum import Enum
 import json
@@ -38,9 +37,23 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from skimage.registration import phase_cross_correlation
 from PlaneWave.ps3cli_client import PS3CLIClient
 
-GUIDING_SHM_NAME = 'PlateSolving_Image'
+PLATE_SOLVING_SHM_NAME = 'PlateSolving_Image'
 
 logger = logging.getLogger('mast.unit')
+
+
+class Coord(NamedTuple):
+    ra: Angle
+    dec: Angle
+
+
+class SolvingTolerance:
+    ra: Angle
+    dec: Angle
+
+    def __init__(self, ra: Angle, dec: Angle):
+        self.ra = ra
+        self.dec = dec
 
 
 class GuideDirections(Enum):
@@ -148,7 +161,7 @@ class PlateSolverResult:
             return PlateSolverResult(ret)
 
 
-class SolvingServerSolution:
+class PS3Solution:
     num_matched_stars: int
     match_rms_error_arcsec: float
     match_rms_error_pixels: int
@@ -157,19 +170,40 @@ class SolvingServerSolution:
     matched_arcsec_per_pixel: float
     rotation_angle_degs: float
 
+    def __init__(self, d: dict):
+        if d is None:
+            self.num_matched_stars = 0
+            self.match_rms_error_arcsec = 0
+            self.match_rms_error_pixels = 0
+            self.center_ra_j2000_rads = 0
+            self.center_dec_j2000_rads = 0
+            self.matched_arcsec_per_pixel = 0
+            self.rotation_angle_degs = 0
+        else:
+            self.num_matched_stars = d['num_matched_stars']
+            self.match_rms_error_arcsec = d['match_rms_error_arcsec']
+            self.match_rms_error_pixels = d['match_rms_error_pixels']
+            self.center_ra_j2000_rads = d['center_ra_j2000_rads']
+            self.center_dec_j2000_rads = d['center_dec_j2000_rads']
+            self.matched_arcsec_per_pixel = d['matched_arcsec_per_pixel']
+            self.rotation_angle_degs = d['rotation_angle_degs']
 
-class SolvingServerResult:
+
+class PS3Result:
     state: str              # 'ready', 'loading', 'extracting', 'matching', 'found_match', 'no_match', 'error'
     error_message: str
     last_log_message: str
     num_extracted_stars: int
     running_time_seconds: float
-    solution: SolvingServerSolution
+    solution: PS3Solution
 
-    def __init__(self, state: str, error_message: str):
-        self.state = state
-        self.error_message = error_message
-
+    def __init__(self, d: dict):
+        self.state: str = d['state']
+        self.error_message: str | None = d['error_message'] if 'error_message' in d else None
+        self.last_log_message: str | None = d['last_log_message'] if 'last_log_message' in d else None
+        self.num_extracted_stars: int = d['num_extracted_stars'] if 'num_extracted_stars' in d else 0
+        self.running_time_seconds: float = d['running_time_seconds'] if 'running_time_seconds' in d else 0
+        self.solution: PS3Solution | None = PS3Solution(d['solution']) if 'solution' in d else None
 
 
 class UnitActivities(IntFlag):
@@ -208,13 +242,9 @@ class Unit(Component):
         self._connected: bool = False
         self._is_guiding: bool = False
         self._is_autofocusing: bool = False
-        self.shm: SharedMemory | None = None
-
-        self.plate_solver_process: psutil.Process | subprocess.Popen | None = None
 
         # Stuff for plate solving
         self.was_tracking_before_guiding: bool = False
-        self.sock_to_solver: socket = None
 
         file_handler = [h for h in logger.handlers if isinstance(h, DailyFileHandler)]
         logger.info(f"logging to '{file_handler[0].path}'")
@@ -261,7 +291,6 @@ class Unit(Component):
         self.timer.name = 'unit-timer-thread'
         self.timer.start()
 
-        self.shm = None
         self.reference_image = None
         self.autofocus_result: AutofocusResult | None = None
 
@@ -272,7 +301,7 @@ class Unit(Component):
 
         self.errors: List[str] = []
 
-        self.latest_solver_result: PlateSolverResult | None = None
+        self.latest_solver_result: PS3Result | None = None
 
         self._initialized = True
         logger.info("unit: initialized")
@@ -412,12 +441,6 @@ class Unit(Component):
         return self.pw.status().autofocus.is_running
 
     def end_guiding(self):
-        # try:
-        #     self.plate_solver_process.kill()
-        # except psutil.NoSuchProcess:
-        #     pass
-
-        # self.sock_to_solver.shutdown(socket.SHUT_RDWR)
         self.end_activity(UnitActivities.Guiding)
         logger.info(f'guiding ended')
 
@@ -480,7 +503,6 @@ class Unit(Component):
         filer = Filer()
         cmd = 'C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli\\ps3cli'
 
-        errors = []
         op = function_name()
         guiding_conf = self.unit_conf['guiding']
         guiding_roi: UnitRoi = UnitRoi(
@@ -501,8 +523,6 @@ class Unit(Component):
         )
 
         # TODO: use solve_and_correct()
-
-        path_maker = PathMaker()
 
         while self.is_active(UnitActivities.Guiding):
 
@@ -610,8 +630,8 @@ class Unit(Component):
                 # delta_ra_hours = mount_ra_hours - solved_ra_hours    # mind sign and mount offset direction
                 # delta_dec_degs = mount_dec_degs - solved_dec_degs    # ditto
 
-                delta_ra_arcsec = Angle(delta_ra_hours, unit='hour').to(unit='arcsec').value
-                delta_dec_arcsec = Angle(delta_dec_degs, unit='deg').to(unit='arcsec').value
+                delta_ra_arcsec = Angle(delta_ra_hours * u.hour).arcsecond
+                delta_dec_arcsec = Angle(delta_dec_degs * u.deg).arcsecond
             except Exception as e:
                 return CanonicalResponse(exception=e)
 
@@ -634,15 +654,15 @@ class Unit(Component):
             try:
                 if abs(delta_ra_arcsec) >= self.min_ra_correction_arcsec:
                     correction['ra']['correction_arcsec'] = delta_ra_arcsec
-                    correction['ra']['correction_deg'] = Angle(delta_ra_arcsec, unit='arcsec').to(unit='deg').value
-                    correction['ra']['correction_sexa'] = (Angle(delta_ra_arcsec, unit='arcsec').
+                    correction['ra']['correction_deg'] = Angle(delta_ra_arcsec * u.arcsec).degree
+                    correction['ra']['correction_sexa'] = (Angle(delta_ra_arcsec * u.arcsec).
                                                            to_string(unit='degree', sep=':', precision=3))
                     correction['ra']['needs_correction'] = True
 
                 if abs(delta_dec_arcsec) >= self.min_dec_correction_arcsec:
                     correction['dec']['correction_arcsec'] = delta_dec_arcsec
-                    correction['dec']['correction_deg'] = Angle(delta_dec_arcsec, unit='arcsec').to(unit='deg').value
-                    correction['dec']['correction_sexa'] = (Angle(delta_dec_arcsec, unit='arcsec').
+                    correction['dec']['correction_deg'] = Angle(delta_dec_arcsec * u.arcsec).degree
+                    correction['dec']['correction_sexa'] = (Angle(delta_dec_arcsec * u.arcsec).
                                                             to_string(unit='degree', sep=':', precision=3))
                     correction['dec']['needs_correction'] = True
             except Exception as e:
@@ -675,135 +695,104 @@ class Unit(Component):
                 return CanonicalResponse_Ok
             # continue looping
 
-    def do_guide_with_shm(self):
-        """
-        Theory of operation:
-        - The plate solving server was started at App startup
-        - Start UnitActivities.Guiding
-        Returns
-        -------
+    def do_guide_by_solving_with_shm(self, target: Coord):
 
-        """
+        op = function_name()
+        guiding_conf = self.unit_conf['guiding']
+        guiding_roi: UnitRoi = UnitRoi(
+            fiber_x=guiding_conf['fiber_x'],
+            fiber_y=guiding_conf['fiber_y'],
+            width=guiding_conf['width'],
+            height=guiding_conf['height']
+        )
+        binning: Binning = Binning(guiding_conf['binning'], guiding_conf['binning'])
+        guiding_settings: ExposureSettings = ExposureSettings(
+            purpose=ExposurePurpose.Guiding,
+            seconds=guiding_conf['exposure'],
+            # base_folder=base_folder,
+            gain=guiding_conf['gain'],
+            binning=binning,
+            roi=guiding_roi.to_camera_roi(binning=binning),
+            save=True
+        )
+        pixel_scale = self.unit_conf['camera']['pixel_scale_at_bin1'] * binning.x
 
-        if not self.shm:
-            try:
-                self.shm = SharedMemory(name=GUIDING_SHM_NAME)
-            except FileNotFoundError:
-                self.shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=self.camera.NumX*self.camera.NumY*4)
-
-        proc = find_process(patt='ps3cli-20240829 --server')
-        if proc:
-            proc.kill()
-            logger.info(f"killed existing plate solving simulator process (pid={proc.pid})")
-
-        sim_dir = os.path.realpath(os.path.join('src', 'PlateSolveSimulator'))
-        sim_cmd = os.path.join(sim_dir, 'run.bat')
-        logger.info(f"starting plate-solver process with: {sim_cmd}")
-        subprocess.Popen(sim_cmd, cwd=sim_dir, shell=True)
-        start_sleep = time.time()
-        while time.time() - start_sleep <= 20:
-            self.plate_solver_process = find_process(patt='PSSimulator')
-            if self.plate_solver_process:
-                break
-            else:
-                time.sleep(1)
-
-        if self.plate_solver_process:
-            logger.info(f"plate solver simulator process pid={self.plate_solver_process.pid}")
-        else:
-            logger.error(f'No solver process after 20 seconds')
-            return
-
-        # logger.info(f"creating server socket ...")
-        server = socket.create_server(guiding.guider_address_port, family=socket.AF_INET)
-        logger.info(f"listening on {guiding.guider_address_port}")
-        server.listen()
-        # logger.info(f"accepting on server socket")
-        self.sock_to_solver, address = server.accept()
-        # logger.info("accepted on server socket")
-
-        # logger.info("receiving on server socket")
-        s = self.sock_to_solver.recv(1024)
-        # logger.info(f"received '{s}' on server socket")
-        hello = json.loads(s.decode(encoding='utf-8'))
-        if not hello['ready']:
-            pass  # TBD
-
-        logger.info(f"plate solver simulator is ready")
+        shm = SharedMemory(name=PLATE_SOLVING_SHM_NAME, create=True, size=guiding_roi.width * guiding_roi.height * 2)
+        ps3_client = PS3CLIClient()
+        ps3_client.connect('127.0.0.1', 9896)
 
         while self.is_active(UnitActivities.Guiding):
-            logger.info(f"starting {self.unit_conf['guiding']['exposure']} seconds guiding exposure")
-            self.camera.start_exposure(seconds=self.unit_conf['guiding']['exposure'])
-            while self.camera.is_active(CameraActivities.Exposing):
-                if not self.is_active(UnitActivities.Guiding):
-                    self.end_guiding()
-                    return
-                time.sleep(2)
+            logger.info(f"starting {guiding_conf['exposure']} seconds guiding exposure")
+            self.camera.do_start_exposure(guiding_settings)
+
+            logger.info(f"{op}: waiting for image ready ...")
+            self.camera.wait_for_image_ready()
+            logger.info(f"{op}: image is ready ...")
 
             if not self.is_active(UnitActivities.Guiding):
                 self.end_guiding()
-                return
+                break
 
+            logger.info(f"{op}: getting the image from the camera ...")
             image = self.camera.image
 
-            logger.info(f"guiding exposure done, getting the image from the camera")
-            shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=int, buffer=self.shm.buf)
+            shared_image = np.ndarray((guiding_roi.width, guiding_roi.height), dtype=np.uint16, buffer=shm.buf)
             shared_image[:] = image[:]
-            logger.info(f"copied image to shared memory")
+            logger.info(f"{op}: copied image to shared memory")
 
             if not self.is_active(UnitActivities.Guiding):
-                self.end_guiding()
-                return
+                break
 
-            pw_status = self.pw.status()
-            # try to fool the plate solver by skewing ra and dec ?!?
-            ra = pw_status.mount.ra_j2000_hours
-            dec = pw_status.mount.dec_j2000_degs
+            ps3_client.begin_platesolve_shm(
+                shm_key=PLATE_SOLVING_SHM_NAME,
+                width_pixels=guiding_roi.width,
+                height_pixels=guiding_roi.height,
+                arcsec_per_pixel_guess=pixel_scale,
+                enable_all_sky_match=True,
+                enable_local_quad_match=True,
+                enable_local_triangle_match=True,
+                ra_guess_j2000_rads=target.ra.radian,
+                dec_guess_j2000_rads=target.dec.radian,
+            )
 
-            request = {
-                'ra': ra + (20 / (24 * 60 * 60)),
-                'dec': dec + (15 / (360 * 60 * 60)),
-                'width': self.camera.NumX,
-                'height': self.camera.NumY,
-            }
-            self.sock_to_solver.send(json.dumps(request).encode('utf-8'))
+            solving_result: PS3Result | None = None
+            start = datetime.datetime.now()
+            end = start + datetime.timedelta(seconds=60)
 
-            # plate solver is now solving
+            while datetime.datetime.now() < end:
+                solving_result: PS3Result = PS3Result(ps3_client.platesolve_status())
+                if (solving_result.state == 'error' or
+                        solving_result.state == 'found_match' or
+                        solving_result.state == 'no_match'):
+                    break
+                else:
+                    time.sleep(.1)
 
-            if not self.is_active(UnitActivities.Guiding):
-                self.end_guiding()
-                return
-
-            # block till the solver is done
-
-            b = self.sock_to_solver.recv(1024)
-            response = json.loads(b)
-
-            if not response['success']:
-                logger.warning(f"solver could not solve, reason '{response.reasons}")
+            if datetime.datetime.now() >= end:
+                ps3_client.platesolve_cancel()
                 continue
 
-            # logger.info('parsing plate solving result')
+            if not self.is_active(UnitActivities.Guiding):
+                break
 
-            if response['success']:
-                logger.info(f"plate solving succeeded")
-                solved_ra = response['ra']
-                solved_dec = response['dec']
-                pw_status = self.pw.status()
-                mount_ra = pw_status.mount.ra_j2000_hours
-                mount_dec = pw_status.mount.dec_j2000_degs
+            if solving_result.state == 'no_match':
+                logger.error(f"solver did not find a match (latest_error: {solving_result.error_message}")
+                continue
+            if solving_result.state == 'error':
+                logger.error(f"solver error: {solving_result.error_message}")
+                continue
 
-                delta_ra = solved_ra - mount_ra      # mind sign and mount offset direction
-                delta_dec = solved_dec - mount_dec   # ditto
+            if solving_result.state == 'found_match' and solving_result.solution:
+                logger.info(f"plate solver found a match")
+                solved_ra_arcsec = Angle(solving_result.solution.center_ra_j2000_rads * u.radian).arcsecond
+                solved_dec_arcsec = Angle(solving_result.solution.center_dec_j2000_rads * u.radian).arcsecond
 
-                delta_ra_arcsec = delta_ra / (60 * 60)
-                delta_dec_arcsec = delta_dec / (60 * 60)
+                delta_ra_arcsec = solved_ra_arcsec - target.ra.arcsecond      # mind sign and mount offset direction
+                delta_dec_arcsec = solved_dec_arcsec - target.dec.arcsecond   # ditto
 
-                logger.info(f"telling mount to offset by ra={delta_ra_arcsec:.10f}arcsec, " +
-                            f"dec={delta_dec_arcsec:.10f}arcsec")
+                logger.info(f"offsetting mount by ra={delta_ra_arcsec:.3f}arcsec, " +
+                            f"dec={delta_dec_arcsec:.3f}arcsec")
                 self.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
-            else:
-                pass  # TBD
 
             logger.info(f"done solving cycle, sleeping {self.unit_conf['guiding']['interval']} seconds ...")
             # avoid sleeping for a long time, for better agility at sensing that guiding was stopped
@@ -812,12 +801,15 @@ class Unit(Component):
             while datetime.datetime.now() < end_sleep:
                 if not self.is_active(UnitActivities.Guiding):
                     logger.info('no UnitActivities.Guiding, bailing out ...')
-                    self.end_guiding()
-                    return
+                    break
                 logger.info('sleeping ...')
                 time.sleep(1)
 
-    def start_guiding_by_solving(self):
+        self.end_guiding()
+        ps3_client.close()
+        shm.unlink()
+
+    def start_guiding_by_solving(self, ra_j2000_hours: float, dec_j2000_degs: float):
         """
         Starts the ``autoguide`` routine
 
@@ -840,7 +832,8 @@ class Unit(Component):
 
         executor = concurrent.futures.ThreadPoolExecutor()
         executor.thread_names_prefix = 'guiding-executor'
-        future = executor.submit(self.do_guide_by_solving_without_shm)
+        target: Coord = Coord(ra=Angle(ra_j2000_hours * u.hour), dec=Angle(dec_j2000_degs * u.deg))
+        future = executor.submit(self.do_guide_by_solving_with_shm, target=target)
         time.sleep(2)
         if future.running():
             def stop_tracking(_):
@@ -869,13 +862,6 @@ class Unit(Component):
 
         if self.is_active(UnitActivities.Guiding):
             self.end_activity(UnitActivities.Guiding)
-
-        if self.plate_solver_process:
-            try:
-                self.plate_solver_process.kill()
-                logger.info(f'killed plate solving process pid={self.plate_solver_process.pid}')
-            except psutil.NoSuchProcess:
-                pass
 
         if not self.was_tracking_before_guiding:
             self.mount.stop_tracking()
@@ -1052,17 +1038,6 @@ class Unit(Component):
 
     def end_lifespan(self):
         logger.info('unit end lifespan')
-        if 'plate_solver_process' in self.__dict__.keys() and self.plate_solver_process:
-            try:
-                self.plate_solver_process.kill()
-            except psutil.NoSuchProcess:
-                pass
-
-        if self.shm:
-            self.shm.close()
-            self.shm.unlink()
-            self.shm = None
-
         self.shutdown()
 
     def start_lifespan(self):
@@ -1118,14 +1093,12 @@ class Unit(Component):
             except Exception as e:
                 logger.error(f"websocket.send error: {e}")
 
-    def plate_solve(self, settings: ExposureSettings, use_solving_server_with_shm: bool = True) \
-            -> PlateSolverResult | SolvingServerResult:
+    def plate_solve(self, settings: ExposureSettings, target: Coord) -> PS3Result:
         op = function_name()
 
         while self.is_active(UnitActivities.Solving):
 
             image_path = settings.image_path
-            result_path = os.path.join(os.path.dirname(image_path), 'result.txt')
 
             #
             # Start exposure
@@ -1134,14 +1107,13 @@ class Unit(Component):
             response = self.camera.do_start_exposure(settings)
             if response.failed:
                 logger.error(f"{op}: could not start acquisition exposure: {response=}")
-                return PlateSolverResult({'succeeded': False, 'errors': response.errors})
+                return PS3Result({
+                    'state': 'error',
+                    'error_message': f'could not start exposure ({[response.errors]})'
+                })
 
-            if use_solving_server_with_shm:
-                self.camera.wait_for_image_ready()
-                logger.info(f"{op}: image is ready")
-            else:
-                self.camera.wait_for_image_saved()
-                logger.info(f"{op}: image was saved")
+            self.camera.wait_for_image_ready()
+            logger.info(f"{op}: image is ready")
 
             if settings.binning.x != settings.binning.y:
                 raise Exception(f"cannot deal with non-equal horizontal and vertical binning " +
@@ -1149,79 +1121,137 @@ class Unit(Component):
             pixel_scale = self.unit_conf['camera']['pixel_scale_at_bin1'] * settings.binning.x
 
             filer = Filer()
-            if use_solving_server_with_shm:
 
-                shm = SharedMemory(name=GUIDING_SHM_NAME, create=True, size=self.camera.NumX*self.camera.NumY*4)
-                shared_image = np.ndarray((self.camera.NumX, self.camera.NumY), dtype=int, buffer=shm.buf)
-                shared_image[:] = self.camera.image[:]
-                ps3_client: PS3CLIClient = PS3CLIClient()
+            width = settings.roi.numX
+            height = settings.roi.numY
+            shm = SharedMemory(name=PLATE_SOLVING_SHM_NAME, create=True, size=width * height * 2)
+            shared_image = np.ndarray((width, height), dtype=np.uint16, buffer=shm.buf)
+            shared_image[:] = self.camera.image[:]
+            ps3_client: PS3CLIClient = PS3CLIClient()
 
-                pw_status = self.pw.status()
-                ps3_client.connect('127.0.0.1', 9896)
-                start = datetime.datetime.now()
-                timeout_seconds: float = 10
-                end = start + datetime.timedelta(seconds=timeout_seconds)
-                ps3_client.begin_platesolve_shm(
-                    shm_key=GUIDING_SHM_NAME,
-                    height_pixels=settings.roi.numY,
-                    width_pixels=settings.roi.numX,
-                    arcsec_per_pixel_guess=pixel_scale,
-                    enable_all_sky_match=True,
-                    enable_local_quad_match=True,
-                    enable_local_triangle_match=True,
-                    ra_guess_j2000_rads=Angle(pw_status.mount.ra_j2000_hours, 'hour').to('rad'),
-                    dec_guess_j2000_rads=Angle(pw_status.mount.dec_j2000_degs, 'degs').to('rad')
-                )
+            ps3_client.connect('127.0.0.1', 9896)
+            start = datetime.datetime.now()
+            timeout_seconds: float = 10
+            end = start + datetime.timedelta(seconds=timeout_seconds)
+            ps3_client.begin_platesolve_shm(
+                shm_key=PLATE_SOLVING_SHM_NAME,
+                height_pixels=settings.roi.numY,
+                width_pixels=settings.roi.numX,
+                arcsec_per_pixel_guess=pixel_scale,
+                enable_all_sky_match=True,
+                enable_local_quad_match=True,
+                enable_local_triangle_match=True,
+                ra_guess_j2000_rads=target.ra.radian,
+                dec_guess_j2000_rads=target.dec.radian
+            )
 
-                while True:
-                    solver_status: SolvingServerResult = ps3_client.platesolve_status()
+            solver_status: PS3Result
+            while True:
+                solver_status = PS3Result(ps3_client.platesolve_status())
 
-                    if (solver_status.state == 'error' or
-                            solver_status.state == 'no_match' or
-                            solver_status.state == 'found_match'):
-                        return solver_status
+                if (solver_status.state == 'error' or
+                        solver_status.state == 'no_match' or
+                        solver_status.state == 'found_match'):
+                    break
 
-                    if datetime.datetime.now() >= end:
-                        ps3_client.platesolve_cancel()
-                        return SolvingServerResult(state='error',
-                                                   error_message=f'time out ({timeout_seconds} seconds), cancelled')
-                    else:
-                        time.sleep(.1)
-            else:
-                cmd = 'C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli\\ps3cli'
-
-                command = [cmd, image_path, f'{pixel_scale}', result_path, 'C:/Users/mast/Documents/Kepler']
-                logger.info(f'{op}: image saved, running solver ...')
-
-                result = None
-                exit_status: int = 0
-                try:
-                    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
-                    filer.move_ram_to_shared(image_path)
-                except subprocess.CalledProcessError as e:
-                    exit_status = e.returncode
-                    logger.error(f'{op}: solver return code: {PlateSolverCode(e.returncode).__repr__()}')
-                    with open(result_path, 'w') as file:
-                        file.write(e.stdout.decode())
-
-                    # if it's a HARD error (not just NoStarMatch), cannot continue
-                    if (exit_status == PlateSolverCode.InvalidArguments or
-                            exit_status == PlateSolverCode.CatalogNotFound or
-                            exit_status == PlateSolverCode.NoImageLoad or
-                            exit_status == PlateSolverCode.GeneralFailure):
-                        logger.error(f"{op}: solver failed with {PlateSolverCode(exit_status).__repr__()}.")
-                        return PlateSolverResult({'succeeded': False,
-                                                  'errors': [f"solver failed {PlateSolverCode(exit_status).__repr__()}"]})
-
-                if exit_status == 0:
-                    return PlateSolverResult.from_file(result_path)
-                elif exit_status == PlateSolverCode.NoStarMatch:
-                    return PlateSolverResult({'succeeded': False, 'errors': ['no stars matched']})
+                if datetime.datetime.now() >= end:
+                    ps3_client.platesolve_cancel()
+                    solver_status = PS3Result({
+                        'state': 'error',
+                        'error_message': f'time out ({timeout_seconds} seconds), cancelled'
+                    })
+                    break
                 else:
-                    return PlateSolverResult({'succeeded': False, 'errors': [f"unknown solver error: {exit_status}"]})
+                    time.sleep(.1)
 
             self.camera.wait_for_image_saved()
-            filer.move_ram_to_shared(result_path)
+            filer.move_ram_to_shared(image_path)
+
+            return solver_status
+
+    def solve_and_correct(self,
+                          target: Coord,
+                          exposure_settings: ExposureSettings,
+                          solving_tolerance: SolvingTolerance,
+                          caller: str | None = None,
+                          max_tries: int = 3) -> bool:
+        """
+        Tries for max_tries times to:
+        - Take an exposure using exposure_settings
+        - Plate solve the image
+        - If the solved coordinates are NOT within the solving_tolerance (first time vs. the mount coordinates,
+           following times vs. the last solved coordinates), correct the mount
+
+        Parameters
+        ----------
+        target: (ra, dec)
+        exposure_settings: camera settings for the exposure
+        solving_tolerance: how close do we need to be to stop trying
+        caller: A string to be added to the log messages
+        max_tries: How many times to try to get withing the solving_tolerance
+
+        Returns
+        -------
+        boolean: True if succeeded within max_tries to get within solving_tolerance
+
+        """
+        op = function_name()
+        if caller:
+            op += f":{caller}"
+
+        self.start_activity(UnitActivities.Solving)
+
+        try_number: int = 0
+        for try_number in range(max_tries):
+            logger.info(f"{op}: calling plate_solve ({try_number=} of {max_tries=})")
+            exposure_settings.tags['try'] = try_number
+            self.latest_solver_result = self.plate_solve(target=target, settings=exposure_settings)
+
+            if self.latest_solver_result.state != 'found_match':
+                msg = None
+                if self.latest_solver_result.error_message:
+                    msg = self.latest_solver_result.error_message
+                elif self.latest_solver_result.last_log_message:
+                    msg = self.latest_solver_result.last_log_message
+                logger.info(f"{op}: plate solver failed state={self.latest_solver_result.state}, {msg=}")
+                self.end_activity(UnitActivities.Solving)
+                return False
+
+            logger.info(f"plate solver found a match, yey!!!")
+            solved_ra_arcsec: float = (
+                Angle(self.latest_solver_result.solution.center_ra_j2000_rads * u.radian).arcsecond)
+            solved_dec_arcsec: float = (
+                Angle(self.latest_solver_result.solution.center_dec_j2000_rads * u.radian).arcsecond)
+            delta_ra_arcsec: float = solved_ra_arcsec - target.ra.arcsecond
+            delta_dec_arcsec: float = solved_dec_arcsec - target.dec.arcsecond
+
+            if (abs(delta_ra_arcsec) <= solving_tolerance.ra.arcsecond and
+                    abs(delta_dec_arcsec) <= solving_tolerance.dec.arcsecond):
+                logger.info(f"{op}: within tolerances, actual: ({delta_ra_arcsec:.3f}, {delta_dec_arcsec:.3f}) " +
+                            f"tolerance: ({solving_tolerance.ra.arcsecond:.3f}, " +
+                            f"{solving_tolerance.dec.arcsecond:.3f}), done.")
+                self.end_activity(UnitActivities.Solving)
+                break
+
+            logger.info(f"{op}: outside tolerances, actual: ({delta_ra_arcsec:.3f}, {delta_dec_arcsec:.3f}) " +
+                        f"tolerance: ({solving_tolerance.ra.arcsecond:.3f}, {solving_tolerance.dec.arcsecond:.3f})")
+            logger.info(f"{op}: offsetting mount by ({delta_ra_arcsec:.3f}, {delta_dec_arcsec:.3f}) arcsec ...")
+
+            self.start_activity(UnitActivities.Correcting)
+            self.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
+            while self.mount.is_slewing:
+                time.sleep(.5)
+            time.sleep(5)
+            self.end_activity(UnitActivities.Correcting)
+            logger.info(f"{op}: mount stopped moving")
+            # give it another try ...
+
+        if try_number == max_tries - 1:
+            self.end_activity(UnitActivities.Solving)
+            logger.info(f"{op}: could not reach tolerances within {max_tries=}")
+            return False
+
+        return True
 
     def do_acquire(self, target_ra_j2000_hours: float, target_dec_j2000_degs: float):
         op = function_name()
@@ -1242,6 +1272,8 @@ class Unit(Component):
         self.mount.goto_ra_dec_j2000(target_ra_j2000_hours, target_dec_j2000_degs)
         while self.stage.is_moving or self.mount.is_slewing:
             time.sleep(1)
+        logger.info(f"sleeping 10 seconds to let the mount stop ...")
+        time.sleep(10)
         self.end_activity(UnitActivities.Positioning)
 
         #
@@ -1263,69 +1295,22 @@ class Unit(Component):
         # loop trying to solve and correct the mount till within tolerances
         #
         tries: int = acquisition_conf['tries'] if 'tries' in acquisition_conf else 3
-        default_tolerance: Angle = Angle(1, unit='arcsec')
+        default_tolerance: Angle = Angle(1 * u.arcsecond)
         ra_tolerance: Angle = default_tolerance
         dec_tolerance: Angle = default_tolerance
         if 'tolerance' in acquisition_conf:
             if 'ra_arcsec' in acquisition_conf['tolerance']:
-                ra_tolerance = Angle(acquisition_conf['tolerance']['ra_arcsec'], unit='arcsec')
+                ra_tolerance = Angle(acquisition_conf['tolerance']['ra_arcsec'] * u.arcsecond)
             if 'dec_arcsec' in acquisition_conf['tolerance']:
-                dec_tolerance = Angle(acquisition_conf['tolerance']['dec_arcsec'], unit='arcsec')
-        target_ra: Angle = Angle(target_ra_j2000_hours, unit='hour')
-        target_dec: Angle = Angle(target_dec_j2000_degs, unit='deg')
+                dec_tolerance = Angle(acquisition_conf['tolerance']['dec_arcsec'] * u.arcsecond)
 
-        def solve_and_correct(settings: ExposureSettings, caller: str | None = None) -> bool:
-            op = function_name()
-            if caller:
-                op += f":{caller}"
+        target = Coord(ra=Angle(target_ra_j2000_hours * u.hour), dec=Angle(target_dec_j2000_degs * u.deg))
 
-            self.start_activity(UnitActivities.Solving)
-            try_number: int = 0
-            for try_number in range(tries):
-                logger.info(f"{op}: calling plate_solve ({try_number=} of {tries=})")
-                settings.tags['try'] = try_number
-                self.latest_solver_result = self.plate_solve(settings=settings)
-
-                if not self.latest_solver_result.succeeded:
-                    logger.info(f"{op}: plate solver failed ({self.latest_solver_result.errors=}")
-                    return False
-
-                solved_ra: Angle = Angle(self.latest_solver_result.ra_j2000_hours, unit='hour')
-                solved_dec: Angle = Angle(self.latest_solver_result.dec_j2000_degrees, unit='deg')
-                delta_ra: Angle = solved_ra - target_ra
-                delta_dec: Angle = solved_dec - target_dec
-
-                # as strings, in degrees, for logging
-                ra_delta_sex = delta_ra.to_string(unit='deg', sep=':', precision=2)
-                dec_delta_sex = delta_dec.to_string(unit='deg', sep=':', precision=2)
-                ra_tolerance_sex = ra_tolerance.to_string(unit='deg', sep=':', precision=2)
-                dec_tolerance_sex = dec_tolerance.to_string(unit='deg', sep=':', precision=2)
-
-                if abs(delta_ra) <= ra_tolerance and abs(delta_dec) <= dec_tolerance:
-                    logger.info(f"{op}: within tolerances, ({ra_delta_sex=}, {dec_delta_sex=}) " +
-                                f"({ra_tolerance_sex=}, {dec_tolerance_sex=}), done.")
-                    self.end_activity(UnitActivities.Solving)
-                    break
-
-                logger.info(f"{op}: offsetting mount by ({ra_delta_sex=}, {dec_delta_sex=} ...")
-                self.start_activity(UnitActivities.Correcting)
-                self.pw.mount_offset(
-                    ra_add_arcsec=delta_ra.to('arcsec').value,
-                    dec_add_arcsec=delta_dec.to('arcsec').value)
-                while self.mount.is_slewing:
-                    time.sleep(.5)
-                self.end_activity(UnitActivities.Correcting)
-                logger.info(f"{op}: mount stopped moving")
-                # give it another try ...
-
-            if try_number == tries:
-                self.end_activity(UnitActivities.Solving)
-                logger.info(f"{op}: could not reach tolerances within {tries=}")
-                return False
-
-            return True
-
-        if not solve_and_correct(phase1_settings, caller='phase#1'):
+        if not self.solve_and_correct(exposure_settings=phase1_settings,
+                                      target=target,
+                                      solving_tolerance=SolvingTolerance(ra_tolerance, dec_tolerance),
+                                      caller='phase#1',
+                                      max_tries=tries):
             logger.info(f"{op}: phase #1 (stage at Sky) failed")
             self.end_activity(UnitActivities.Acquiring)
             return
@@ -1340,29 +1325,27 @@ class Unit(Component):
             time.sleep(.2)
 
         guiding_conf = self.unit_conf['guiding']
-        guiding_roi: UnitRoi = UnitRoi(
-            guiding_conf['roi']['fiber_x'],
-            guiding_conf['roi']['fiber_y'],
-            width=self.camera.guiding_roi_width,
-            height=self.camera.guiding_roi_height
-        )
         binning: Binning = Binning(guiding_conf['binning'], guiding_conf['binning'])
         phase2_settings = ExposureSettings(
-            seconds=guiding_conf['seconds'],
+            seconds=guiding_conf['exposure'],
             purpose=ExposurePurpose.Acquisition,
             binning=binning,
-            roi=guiding_roi.to_camera_roi(binning=binning),
+            roi=UnitRoi.from_dict(guiding_conf['roi']).to_camera_roi(binning=binning),
             gain=guiding_conf['gain'] if 'gain' in guiding_conf else None,
             base_folder=acquisition_folder,
             save=True
         )
-        success = solve_and_correct(phase2_settings, caller="phase#2")
+        success = self.solve_and_correct(exposure_settings=phase2_settings,
+                                         target=target,
+                                         solving_tolerance=SolvingTolerance(ra_tolerance, dec_tolerance),
+                                         caller="phase#2",
+                                         max_tries=tries)
         logger.info("phase #2 (stage at Spec) " + 'succeeded' if success else 'failed')
         if success:
             self.reference_image = self.camera.image
         self.end_activity(UnitActivities.Acquiring)
 
-        self.do_start_guiding_by_cross_correlation()
+        # self.do_start_guiding_by_cross_correlation()
 
     def acquire(self, ra_j2000_hours: float, dec_j2000_degs: float):
         Thread(name='acquisition', target=self.do_acquire, args=[ra_j2000_hours, dec_j2000_degs]).start()
@@ -1386,8 +1369,8 @@ class Unit(Component):
         guiding_roi: UnitRoi = UnitRoi(
             fiber_x=guiding_conf['fiber_x'],
             fiber_y=guiding_conf['fiber_y'],
-            width=self.guiding_roi_width,
-            height=self.guiding_roi_height
+            width=guiding_conf['width'],
+            height=guiding_conf['height']
         )
 
         binning: Binning = Binning(guiding_conf['binning'], guiding_conf['binning'])
@@ -1405,8 +1388,8 @@ class Unit(Component):
         min_ra_correction_arcsec: float = guiding_conf['min_ra_correction_arcsec']
         min_dec_correction_arcsec: float = guiding_conf['min_dec_correction_arcsec']
 
-        min_ra_correction = Angle(min_ra_correction_arcsec, unit='arcsec')
-        min_dec_correction = Angle(min_dec_correction_arcsec, unit='arcsec')
+        min_ra_correction = Angle(min_ra_correction_arcsec * u.arcsecond)
+        min_dec_correction = Angle(min_dec_correction_arcsec * u.arcsecond)
         pixel_scale_arcsec = self.unit_conf['camera']['pixel_scale_at_bin1'] * guiding_conf['binning']
 
         if self.reference_image is not None:
@@ -1437,8 +1420,8 @@ class Unit(Component):
             image = self.camera.image
             logger.info(f"{op}: read the image from the camera")
 
-            rotation_angle: Angle | None = Angle(self.latest_solver_result.rot_angle_degs, unit='deg') \
-                if self.latest_solver_result.succeeded else None
+            rotation_angle: Angle | None = Angle(self.latest_solver_result.solution.rotation_angle_degs * u.deg) \
+                if self.latest_solver_result.state == 'found_match' else None
             if rotation_angle is None:
                 raise Exception(f"{op}: missing rotation angle, cannot use cross correlation results")
 
@@ -1446,17 +1429,16 @@ class Unit(Component):
             #
             # TODO: formula for converting shifted_pixels into (ra,dec), using the rotation angle
             #
-            delta_ra: Angle = Angle(shifted_pixels[1] * pixel_scale_arcsec, unit='arcsec')
-            delta_dec: Angle = Angle(shifted_pixels[0] * pixel_scale_arcsec, unit='arcsec')
+            delta_ra: Angle = Angle(shifted_pixels[1] * pixel_scale_arcsec * u.arcsecond)
+            delta_dec: Angle = Angle(shifted_pixels[0] * pixel_scale_arcsec * u.arcsecond)
 
-            delta_ra = delta_ra if abs(delta_ra) >= min_ra_correction else 0
-            delta_dec = delta_dec if abs(delta_dec) >= min_dec_correction else 0
+            delta_ra = delta_ra if abs(delta_ra.arcsecond) >= min_ra_correction else 0
+            delta_dec = delta_dec if abs(delta_dec.arcsecond) >= min_dec_correction else 0
 
             if delta_ra or delta_dec:
                 logger.info(f"{op}: correcting mount by ({delta_ra=}, {delta_dec=} ...")
                 self.start_activity(UnitActivities.Correcting)
-                self.pw.mount_offset(ra_add_arcsec=delta_ra.to('arcsec').value,
-                                     dec_add_arcsec=delta_dec.to('arcsec').value)
+                self.pw.mount_offset(ra_add_arcsec=delta_ra.arcsecond, dec_add_arcsec=delta_dec.arcsecond)
                 while self.mount.is_slewing:
                     time.sleep(.5)
                 self.end_activity(UnitActivities.Correcting)
@@ -1515,7 +1497,7 @@ class Unit(Component):
 
     def test_stage_repeatability(self,
                                  start_position: int | str = 50000,
-                                 end_position: int | str = 200000,
+                                 end_position: int | str = 300000,
                                  step: int | str = 25000,
                                  exposure_seconds: int | str = 5,
                                  binning: int | str = 1,
@@ -1526,7 +1508,7 @@ class Unit(Component):
 
     def do_test_stage_repeatability(self,
                                     start_position: int | str = 50000,
-                                    end_position: int | str = 200000,
+                                    end_position: int | str = 300000,
                                     step: int | str = 25000,
                                     exposure_seconds: int | str = 5,
                                     binning: int | str = 1,
@@ -1555,15 +1537,20 @@ class Unit(Component):
                 time.sleep(.5)
 
             # expose at reference
-            context = camera.ExposureSettings(seconds=exposure_seconds, gain=gain, binning=Binning(binning, binning),
-                                              roi=None, tags={
+            exposure_settings = camera.ExposureSettings(
+                seconds=exposure_seconds,
+                gain=gain,
+                binning=Binning(binning, binning),
+                roi=None,
+                tags={
                     "stage-repeatability": None,
-                    "reference-for": ({position})
+                    "reference-for": position,
                 }, save=True)
 
-            self.camera.do_start_exposure(context)
+            self.camera.do_start_exposure(exposure_settings)
             self.camera.wait_for_image_saved()
             logger.info(f"{op}: reference image was saved")
+            Filer().move_ram_to_shared(exposure_settings.image_path)
 
             # expose at shifted position
             logger.info(f"{op}: moving stage to shifted {position=}")
@@ -1571,22 +1558,23 @@ class Unit(Component):
             while self.stage.is_active(StageActivities.Moving):
                 time.sleep(.5)
 
-            context = camera.ExposureSettings(seconds=exposure_seconds, gain=gain, binning=Binning(binning, binning),
-                                              roi=None, tags={
+            exposure_settings = camera.ExposureSettings(
+                seconds=exposure_seconds,
+                gain=gain,
+                binning=Binning(binning, binning),
+                roi=None,
+                tags={
                     "stage-repeatability": None,
-                    "position": ({position})
-                }, save=True)
-            self.camera.do_start_exposure(context)
+                    "position": position,
+                },
+                save=True)
+            self.camera.do_start_exposure(exposure_settings)
             self.camera.wait_for_image_saved()
             logger.info(f"{op}: image at {position=} was saved")
+            Filer().move_ram_to_shared(exposure_settings.image_path)
 
         logger.info(f"{op}: done.")
         return CanonicalResponse_Ok
-
-    def sleep(self, seconds: float | str = 10):
-        if isinstance(seconds, str):
-            seconds = float(seconds)
-        time.sleep(seconds)
 
 
 def serialize_ip_addresses(data: Any) -> Any:
@@ -1638,4 +1626,3 @@ router.add_api_route(base_path + '/stop_guiding', tags=[tag], endpoint=unit.stop
 router.add_api_route(base_path + '/acquire', tags=[tag], endpoint=unit.acquire)
 router.add_api_route(base_path + '/expose_roi', tags=[tag], endpoint=unit.expose_roi)
 router.add_api_route(base_path + '/test_stage_repeatability', tags=[tag], endpoint=unit.test_stage_repeatability)
-router.add_api_route(base_path + '/sleep', tags=[tag], endpoint=unit.sleep)
