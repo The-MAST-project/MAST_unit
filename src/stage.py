@@ -1,13 +1,13 @@
 import logging
 import threading
 import time
-from enum import IntEnum, IntFlag, auto
+from enum import IntEnum, auto
 import datetime
 from typing import List
 
-from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH, function_name
+from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok
+from common.utils import BASE_UNIT_PATH, function_name
 from common.config import Config
-from mastapi import Mastapi
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 import os
 import sys
@@ -63,7 +63,7 @@ stage_direction_str2int_dict: dict = {
 }
 
 
-class Stage(Mastapi, Component, SwitchedPowerDevice):
+class Stage(Component, SwitchedPowerDevice):
     _instance = None
     _initialized = False
 
