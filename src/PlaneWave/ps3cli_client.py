@@ -4,6 +4,15 @@ import socket
 import time
 
 
+class PS3AutofocusResult:
+    has_solution: bool
+    best_focus_position: int
+
+    def __init__(self, d: dict):
+        self.has_solution = d['has_solution']
+        self.best_focus_position = d['best_focus_position']
+
+
 class PS3CLIClient:
     def __init__(self):
         self.sock = None

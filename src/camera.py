@@ -57,9 +57,10 @@ class ExposurePurpose(Enum):
     Exposure = auto(),
     Acquisition = auto()
     Guiding = auto()
+    Autofocus=auto()
 
 
-class Binning(NamedTuple):
+class CameraBinning(NamedTuple):
     x: int
     y: int
 
@@ -80,7 +81,7 @@ class CameraRoi(NamedTuple):
         return f"x={self.startX},y={self.startY},w={self.numX},h={self.numY}"
 
 
-class ExposureSettings:
+class CameraSettings:
     """
 
     Multipurpose exposure context
@@ -110,18 +111,20 @@ class ExposureSettings:
                  seconds: float,
                  purpose: ExposurePurpose = ExposurePurpose.Exposure,
                  gain: float | None = None,
-                 binning: Binning | None = None,
+                 binning: CameraBinning | None = None,
                  roi: CameraRoi | None = None,
                  tags: dict | None = None,
                  save: bool = True,
                  fits_cards: dict | None = None,
-                 base_folder: str | None = None):
+                 base_folder: str | None = None,
+                 image_path: str | None = None,
+                 ):
 
         self.seconds: float = seconds
         self.purpose: ExposurePurpose = purpose
         self.base_folder: str | None = base_folder
         self.image_path: str | None = None
-        self.binning: Binning | None = binning
+        self.binning: CameraBinning | None = binning
         self.gain: float | None = gain
         self.roi: CameraRoi | None = roi
         self.tags: dict | None = tags if tags else {}
@@ -130,40 +133,43 @@ class ExposureSettings:
         self.start: datetime.datetime = datetime.datetime.now()
 
         if self.save:
-            folder = ''
-            if self.base_folder is not None:
-                #
-                # These settings were supplied with a base_folder, so the new folder or file
-                #  must reside under that base_folder
-                #
-                folder = self.base_folder
+            if image_path:
+                self.image_path = image_path
+                os.makedirs(os.path.dirname(self.image_path), exist_ok=True)
             else:
-                #
-                # We were not supplied a base_folder, we'll just make a next-in-line
-                #
-                if self.purpose == ExposurePurpose.Acquisition:
-                    folder = PathMaker().make_acquisition_folder()
-                elif self.purpose == ExposurePurpose.Exposure:
-                    folder = PathMaker().make_exposures_folder()
-                elif self.purpose == ExposurePurpose.Guiding:
-                    folder = PathMaker().make_guidings_folder()
+                folder = ''
+                if self.base_folder is not None:
+                    #
+                    # These settings were supplied with a base_folder, so the new folder or file
+                    #  must reside under that base_folder
+                    #
+                    folder = self.base_folder
+                else:
+                    #
+                    # We were not supplied a base_folder, we'll just make a next-in-line
+                    #
+                    if self.purpose == ExposurePurpose.Acquisition:
+                        folder = PathMaker().make_acquisition_folder()
+                    elif self.purpose == ExposurePurpose.Exposure:
+                        folder = PathMaker().make_exposures_folder()
+                    elif self.purpose == ExposurePurpose.Guiding:
+                        folder = PathMaker().make_guidings_folder()
 
-            os.makedirs(folder, exist_ok=True)
+                    os.makedirs(folder, exist_ok=True)
 
-            file_name = f"seq={PathMaker().make_seq(folder)},time={PathMaker().current_utc()}" + self.make_filename()
+                    parts: List[str] = [
+                        f"seq={PathMaker().make_seq(folder)}",
+                        f"time={PathMaker().current_utc()}",
+                    ]
+                    if self.tags:
+                        for k, v in self.tags.items():
+                            parts.append(f"{k}" if v is None else f"{k}={v}")
+                    parts.append(f"seconds={self.seconds}")
+                    parts.append(f"binning={self.binning}")
+                    parts.append(f"gain={self.gain}")
+                    parts.append(f"roi={self.roi}")
 
-            self.image_path = os.path.join(folder, file_name)
-
-    def make_filename(self):
-        """
-        A consistent recipe for making file names
-        """
-        tags = ''
-        if self.tags:
-            for k, v in self.tags.items():
-                tags += (f"{k}" if v is None else f"{k}={v}") + ','
-
-        return f"{tags}seconds={self.seconds},binning={self.binning},gain={self.gain},roi={self.roi}.fits"
+                    self.image_path = os.path.join(folder, ','.join(parts) + '.fits')
 
 
 class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
@@ -209,7 +215,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
             logger.exception(ex)
             raise ex
 
-        self.latest_settings: None | ExposureSettings = None
+        self.latest_settings: None | CameraSettings = None
         self.latest_temperature_check: datetime.datetime | None = None
         self.temp_check_interval = self.conf['temp_check_interval'] \
             if 'temp_check_interval' in self.conf else self.defaults['temp_check_interval']
@@ -232,7 +238,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         self.errors: List[str] = []
         self.expected_mid_exposure: datetime.datetime | None = None
         self.ccd_temp_at_mid_exposure: float | None = None
-        self._binning: Binning = Binning(1, 1)
+        self._binning: CameraBinning = CameraBinning(1, 1)
         self._roi: CameraRoi | None = None
         self._gain: int | None = None
         
@@ -263,7 +269,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         return self._binning
 
     @binning.setter
-    def binning(self, value: Binning):
+    def binning(self, value: CameraBinning):
         if 1 > value.x > self.maxBinX:
             raise Exception(f'bad {value.x=}, must be > 1 and < {self.maxBinX=}')
         if 1 > value.y > self.maxBinY:
@@ -426,16 +432,16 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
                                 height: int | None = None):
 
         roi = CameraRoi(center_x, center_y, width, height) if all([center_x, center_y, width, height]) else None
-        context = ExposureSettings(seconds=float(seconds) if isinstance(seconds, str) else seconds,
-                                   purpose=ExposurePurpose.Exposure, gain=int(gain) if isinstance(gain, str) else gain,
-                                   binning=Binning(int(binning), int(binning)) if isinstance(binning, str) else Binning(
+        context = CameraSettings(seconds=float(seconds) if isinstance(seconds, str) else seconds,
+                                 purpose=ExposurePurpose.Exposure, gain=int(gain) if isinstance(gain, str) else gain,
+                                 binning=CameraBinning(int(binning), int(binning)) if isinstance(binning, str) else CameraBinning(
                                        binning, binning), roi=roi, tags=None, save=True)
 
         # self.do_start_exposure(purpose=ExposurePurpose.Exposure, tags=None, seconds=seconds, gain=gain,
         #   binning=binning, save=True)
         self.do_start_exposure(context)
 
-    def do_start_exposure(self, settings: ExposureSettings) -> CanonicalResponse:
+    def do_start_exposure(self, settings: CameraSettings) -> CanonicalResponse:
         """
         Starts a *MAST* camera exposure
 
