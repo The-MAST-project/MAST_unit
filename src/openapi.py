@@ -4,7 +4,8 @@ from fastapi.openapi.utils import get_openapi
 import stage
 from mastapi import Mastapi
 from docstring_parser import parse, DocstringStyle
-from common.utils import Subsystem, BASE_UNIT_PATH, init_log
+from common.utils import Subsystem
+from common.mast_logging import init_log
 from typing import Union
 import logging
 import socket

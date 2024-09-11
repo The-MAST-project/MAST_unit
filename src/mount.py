@@ -16,18 +16,9 @@ from fastapi.routing import APIRouter
 import math
 from astropy.coordinates import SkyCoord, frame_transform_graph, Angle
 from common.ascom import ascom_run, AscomDispatcher
+from common.activities import MountActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
-
-
-class MountActivities(IntFlag):
-    StartingUp = auto()
-    ShuttingDown = auto()
-    Slewing = auto()
-    Parking = auto()
-    Tracking = auto()
-    FindingHome = auto()
-    Dancing = auto()
 
 
 class Mount(Component, SwitchedPowerDevice, AscomDispatcher):

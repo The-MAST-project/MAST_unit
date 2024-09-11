@@ -12,14 +12,17 @@ from enum import IntFlag, auto, Enum
 from threading import Thread, Lock
 
 from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH
-from common.utils import PathMaker, Component, CanonicalResponse, CanonicalResponse_Ok, function_name
+from common.utils import Component, CanonicalResponse, CanonicalResponse_Ok, function_name
+from common.paths import PathMaker
 from common.config import Config
+from common.camera import CameraRoi, CameraBinning
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 
 from fastapi.routing import APIRouter
 from astropy.io import fits
 import numpy as np
 from common.ascom import ascom_run, AscomDispatcher
+from common.activities import CameraActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
 
@@ -42,43 +45,11 @@ class AscomCameraState(IntFlag):
     Error = 5
 
 
-class CameraActivities(IntFlag):
-    Idle = 0
-    CoolingDown = auto()
-    WarmingUp = auto()
-    Exposing = auto()
-    ShuttingDown = auto()
-    StartingUp = auto()
-    ReadingOut = auto()
-    Saving = auto()
-
-
 class ExposurePurpose(Enum):
     Exposure = auto(),
     Acquisition = auto()
     Guiding = auto()
-    Autofocus=auto()
-
-
-class CameraBinning(NamedTuple):
-    x: int
-    y: int
-
-    def __repr__(self) -> str:
-        return f"{self.x}x{self.y}"
-
-
-class CameraRoi(NamedTuple):
-    """
-    An ASCOM compatible region-of-interest
-    """
-    startX: int = 0
-    startY: int = 0
-    numX: int | None = None
-    numY: int | None = None
-
-    def __repr__(self) -> str:
-        return f"x={self.startX},y={self.startY},w={self.numX},h={self.numY}"
+    Autofocus = auto()
 
 
 class CameraSettings:
@@ -434,8 +405,8 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         roi = CameraRoi(center_x, center_y, width, height) if all([center_x, center_y, width, height]) else None
         context = CameraSettings(seconds=float(seconds) if isinstance(seconds, str) else seconds,
                                  purpose=ExposurePurpose.Exposure, gain=int(gain) if isinstance(gain, str) else gain,
-                                 binning=CameraBinning(int(binning), int(binning)) if isinstance(binning, str) else CameraBinning(
-                                       binning, binning), roi=roi, tags=None, save=True)
+                                 binning=CameraBinning(int(binning), int(binning)) if isinstance(binning, str) else
+                                 CameraBinning(binning, binning), roi=roi, tags=None, save=True)
 
         # self.do_start_exposure(purpose=ExposurePurpose.Exposure, tags=None, seconds=seconds, gain=gain,
         #   binning=binning, save=True)

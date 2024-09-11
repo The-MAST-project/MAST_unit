@@ -1,5 +1,9 @@
 from threading import Thread
-from common.utils import function_name, init_log, PathMaker, Filer, CanonicalResponse_Ok
+from common.utils import function_name, CanonicalResponse_Ok
+from common.paths import PathMaker
+from common.mast_logging import init_log
+from common.filer import Filer
+from common.config import Config
 import logging
 import time
 import os
@@ -7,8 +11,8 @@ from typing import List
 from PlaneWave.ps3cli_client import PS3CLIClient, PS3AutofocusResult
 from camera import CameraSettings, CameraBinning, ExposurePurpose
 from stage import StagePresetPosition
-from focuser import FocuserActivities
-from unit import UnitActivities, UnitRoi
+from common.activities import UnitActivities, FocuserActivities
+from common.utils import UnitRoi
 
 logger = logging.getLogger('mast.unit.autofocusing')
 init_log(logger)
@@ -182,6 +186,16 @@ class Autofocuser:
             while self.unit.focuser.is_active(FocuserActivities.Moving):
                 time.sleep(.5)
             logger.info(f"{op}: focuser stopped moving")
+
+            best_position = ps3_result.best_focus_position
+            self.unit.unit_conf['focuser']['known_as_good_position'] = best_position
+            try:
+                Config().set_unit(self.unit.hostname, self.unit.unit_conf)
+                logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
+                            f"focuser known-as-good-position {best_position}")
+            except Exception as e:
+                logger.error(f"could not save unit '{self.unit.hostname}' " +
+                             f"configuration for focuser known-as-good-position")
         else:
             logger.error(f"{op}: ps3 could not find an autofocus solution !!!")
 

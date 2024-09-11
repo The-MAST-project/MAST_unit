@@ -9,15 +9,9 @@ from PlaneWave import pwi4_client
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 from common.ascom import ascom_run, AscomDispatcher
+from common.activities import FocuserActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
-
-
-class FocuserActivities(IntFlag):
-    Idle = 0
-    Moving = auto()
-    StartingUp = auto()
-    ShuttingDown = auto()
 
 
 class FocusDirection(IntEnum):

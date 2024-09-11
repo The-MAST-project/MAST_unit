@@ -1,11 +1,13 @@
-from threading import Thread
-from common.utils import function_name, init_log, PathMaker, Filer, CanonicalResponse_Ok, Coord
+import math
+from common.utils import function_name, Coord
+from common.mast_logging import init_log
+from common.filer import Filer
 import logging
 import time
 from typing import List
 from PlaneWave.ps3cli_client import PS3CLIClient, PS3AutofocusResult
 from camera import CameraSettings
-from unit import UnitActivities, UnitRoi
+from common.activities import UnitActivities
 from enum import IntFlag
 from astropy.coordinates import Angle
 import astropy.units as u
@@ -262,8 +264,11 @@ class Solver:
             solved_ra_arcsec: float = Angle(result.solution.center_ra_j2000_rads * u.radian).arcsecond
             solved_dec_arcsec: float = Angle(result.solution.center_dec_j2000_rads * u.radian).arcsecond
 
-            delta_ra_arcsec: float = solved_ra_arcsec - target.ra.arcsecond
-            delta_dec_arcsec: float = solved_dec_arcsec - target.dec.arcsecond
+            # delta_ra_arcsec: float = solved_ra_arcsec - target.ra.arcsecond
+            # delta_dec_arcsec: float = solved_dec_arcsec - target.dec.arcsecond
+            delta_dec_arcsec: float = target.dec.arcsecond - solved_dec_arcsec
+            delta_ra_arcsec: float = ((target.ra.arcsecond - solved_ra_arcsec) *
+                                      math.cos((target.dec.arcsecond + solved_dec_arcsec) / 2))
 
             coord_solved = Coord(ra=Angle(result.solution.center_ra_j2000_rads * u.radian),
                                  dec=Angle(result.solution.center_dec_j2000_rads * u.radian))

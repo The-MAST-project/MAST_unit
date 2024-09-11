@@ -13,6 +13,7 @@ import os
 import sys
 import platform
 from fastapi.routing import APIRouter
+from common.activities import StageActivities
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
 ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
@@ -32,13 +33,6 @@ if platform.system() == "Windows":
     from pyximc import lib as ximclib
 
 logger = logging.getLogger('mast.unit.' + __name__)
-
-
-class StageActivities(IntFlag):
-    Idle = 0
-    StartingUp = auto()
-    ShuttingDown = auto()
-    Moving = auto()
 
 
 class StageDirection(IntEnum):

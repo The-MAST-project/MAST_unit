@@ -10,17 +10,10 @@ from common.config import Config
 from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
 from fastapi.routing import APIRouter
 
-logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
-
 from common.ascom import ascom_run, AscomDispatcher
+from common.activities import CoverActivities
 
-
-class CoverActivities(IntFlag):
-    Idle = 0
-    Opening = auto()
-    Closing = auto()
-    StartingUp = auto()
-    ShuttingDown = auto()
+logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
 
 
 # https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CoverStatus.htm
