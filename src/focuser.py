@@ -64,8 +64,8 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             self.upper_limit = response.value
 
         self.known_as_good_position: int | None = \
-            self.conf['known_as_good_position'] if 'known_as_good_position' in self.conf \
-            else (self.upper_limit / 2) if self.upper_limit \
+            int(self.conf['known_as_good_position']) if 'known_as_good_position' in self.conf \
+            else int(self.upper_limit / 2) if self.upper_limit \
             else None
         logger.info(f"focuser: known_as_good_position: {self.known_as_good_position}")
 
@@ -143,7 +143,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
         # if self.ascom:
         #     response = ascom_run(self, f'Connected = {value}', True)
         #     if response.failed:
-        #         logger.error(f"failed to connect (failure='{response.failure}')")
+        #         logger.error(f"failed to connect (failure=0x{response.failure:08X})")
 
     @property
     def position(self) -> int:

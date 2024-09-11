@@ -84,7 +84,7 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
         """
         response = ascom_run(self, 'Connected = True')
         if response.failed:
-            logger.error(f"failed to connect (failure={response.failure})")
+            logger.error(f"failed to connect {response.failure=}")
             self._connected = False
         else:
             self._connected = True
