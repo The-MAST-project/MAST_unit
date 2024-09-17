@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="MAST-unit" type="PythonConfigurationType" factoryName="Python" focusToolWindowBeforeRun="true">
+  <configuration default="false" name="MAST-unit-day" type="PythonConfigurationType" factoryName="Python">
     <module name="mast" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -7,7 +7,7 @@
     <envs>
       <env name="PYTHONUNBUFFERED" value="1" />
       <env name="MAST_PROJECT" value="unit" />
-      <env name="UNIT_OPERATING_MODE" value="night" />
+      <env name="UNIT_OPERATING_MODE" value="day" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="SDK_NAME" value="Python 3.12 (MAST_unit)" />
