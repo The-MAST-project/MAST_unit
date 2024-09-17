@@ -1,3 +1,4 @@
+import datetime
 from threading import Thread
 from common.utils import function_name, CanonicalResponse_Ok
 from common.paths import PathMaker
@@ -8,7 +9,7 @@ import logging
 import time
 import os
 from typing import List
-from PlaneWave.ps3cli_client import PS3CLIClient, PS3AutofocusResult
+from PlaneWave.ps3cli_client import PS3CLIClient
 from camera import CameraSettings, CameraBinning, ExposurePurpose
 from stage import StagePresetPosition
 from common.activities import UnitActivities, FocuserActivities
@@ -16,6 +17,55 @@ from common.utils import UnitRoi
 
 logger = logging.getLogger('mast.unit.autofocusing')
 init_log(logger)
+
+
+class AutofocusResult:
+    success: bool
+    best_position: float | None
+    tolerance: float | None
+    time_stamp: str
+
+
+class PS3FocusSample:
+
+    def __init__(self, d: dict):
+        self.is_valid: bool = d.get('is_valid', False)
+        self.focus_position: float | None = d.get('focus_position', None)
+        self.num_stars: int | None = d.get('num_stars', None)
+        self.star_rms_diameter_pixels: float | None = d.get('star_rms_diameter_pixels', None)
+        self.vcurve_star_rms_diameter_pixels: float | None = d.get('vcurve_star_rms_diameter_pixels', None)
+
+
+class PS3FocusAnalysisResult:
+
+    def __init__(self, d: dict):
+        self.has_solution: bool = d.get('has_solution', False)
+        self.best_focus_position: float | None = d.get('best_focus_position', None)
+        self.best_focus_star_diameter: float | None = d.get('best_focus_star_diameter', None)
+        self.tolerance: float | None = d.get('tolerance', None)
+        self.vcurve_a: float | None = d.get('vcurve_a', None)
+        self.vcurve_b: float | None = d.get('vcurve_b', None)
+        self.vcurve_c: float | None = d.get('vcurve_c', None)
+        self.focus_samples: List[PS3FocusSample] = []
+        for s in d.get('focus_samples', []):
+            self.focus_samples.append(PS3FocusSample(s))
+
+
+class PS3AutofocusStatus:
+
+    def __init__(self, d: dict):
+        """
+        Parses a dictionary into a PS3AutofocusStatus instance
+        :param d:
+        """
+
+        self.is_running: bool = d.get('is_running', False)
+        self.last_log_message: str | None = d.get('last_log_message', None)
+        self.error_message: str | None = d.get('error_message', None)
+        self.analysis_result = None
+        d1 = d.get('analysis_result', None)
+        if d1:
+            self.analysis_result: PS3FocusAnalysisResult = PS3FocusAnalysisResult(d1)
 
 
 class Autofocuser:
@@ -35,13 +85,12 @@ class Autofocuser:
                 (self.unit.is_active(UnitActivities.AutofocusingPWI4) and self.unit.pw.status().autofocus.is_running))
 
     def start_wis_autofocus(self,
-                            target_ra: float | None,  # center of ROI
-                            target_dec: float | None,  # center of ROI
-                            exposure: float,  # seconds
+                            target_ra: float | None = None,  # center of ROI
+                            target_dec: float | None = None,  # center of ROI
+                            exposure: float = 5,  # seconds
                             start_position: int | None = None,  # when None, start from current position
                             ticks_per_step: int = 50,  # focuser ticks per step
                             number_of_images: int = 5,
-                            binning: int = 1,
                             ):
         """
 
@@ -63,21 +112,20 @@ class Autofocuser:
             raise Exception(f"number_of_images MUST be odd!")
 
         Thread(name='wis-autofocus',
-               target=self.do_wis_autofocus,
+               target=self.do_start_wis_autofocus,
                args=[
                    target_ra, target_dec, exposure, start_position,
-                   ticks_per_step, number_of_images, binning
+                   ticks_per_step, number_of_images
                ]).start()
 
-    def do_wis_autofocus(self,
-                         exposure: float,  # seconds
-                         target_ra: float | None = None,  # center of ROI
-                         target_dec: float | None = None,  # center of ROI
-                         start_position: int | None = None,  # when None, start from the known-as-good position
-                         ticks_per_step: int = 50,  # focuser ticks per step
-                         number_of_images: int = 5,
-                         binning: int = 1,
-                         ):
+    def do_start_wis_autofocus(self,
+                               target_ra: float | None = None,  # center of ROI
+                               target_dec: float | None = None,  # center of ROI
+                               exposure: float = 5,  # seconds
+                               start_position: int | None = None,  # when None, start from the known-as-good position
+                               ticks_per_step: int = 50,  # focuser ticks per step
+                               number_of_images: int = 5,
+                               ):
         """
         Use PlaneWave's new method for autofocus:
         - Move the stage to 'Sky'
@@ -96,7 +144,6 @@ class Autofocuser:
         start_position      - Focuser staring position
         ticks_per_step      - Focuser steps between exposures
         number_of_images    - How many images to take
-        binning             - CameraBinning
         """
         op = function_name()
 
@@ -131,25 +178,25 @@ class Autofocuser:
 
         acquisition_conf: dict = self.unit.unit_conf['acquisition']
         unit_roi = UnitRoi(
-            acquisition_conf['fiber_x'],
-            acquisition_conf['fiber_y'],
-            acquisition_conf['width'],
-            acquisition_conf['height'],
+            acquisition_conf['roi']['fiber_x'],
+            acquisition_conf['roi']['fiber_y'],
+            acquisition_conf['roi']['width'],
+            acquisition_conf['roi']['height'],
         )
-        _binning = CameraBinning(binning, binning)
-        autofocus_settings = CameraSettings(
-            seconds=exposure,
-            purpose=ExposurePurpose.Autofocus,
-            binning=_binning,
-            roi=unit_roi.to_camera_roi(binning=_binning),
-            gain=acquisition_conf['gain'],
-            save=True,
-        )
+        _binning = CameraBinning(1, 1)
         autofocus_folder = PathMaker().make_autofocus_folder()
 
         files: List[str] = []
         for image_no in range(number_of_images):
-            autofocus_settings.image_path = os.path.join(autofocus_folder, f"FOCUS{focuser_position:05}.fits")
+            autofocus_settings = CameraSettings(
+                seconds=exposure,
+                purpose=ExposurePurpose.Autofocus,
+                binning=_binning,
+                roi=unit_roi.to_camera_roi(binning=_binning),
+                gain=acquisition_conf['gain'],
+                image_path=os.path.join(autofocus_folder, f"FOCUS{int(focuser_position):05}.fits"),
+                save=True,
+            )
 
             logger.info(f"{op}: starting exposure #{image_no} of {number_of_images} at {focuser_position=} ...")
             self.unit.camera.do_start_exposure(autofocus_settings)
@@ -174,33 +221,80 @@ class Autofocuser:
         # The files are now on the RAM disk
 
         ps3_client = PS3CLIClient()
-        ps3_client.connect('127.0.0.1', 9896)
-        ps3_result = PS3AutofocusResult(ps3_client.analyze_focus(files))
+        ps3_client.connect('127.0.0.1', 8998)
+        ps3_client.begin_analyze_focus(files)
+
+        status: PS3AutofocusStatus | None = None
+        d: dict | None = None
+        timeout = 60
+        start = datetime.datetime.now()
+        end = start + datetime.timedelta(seconds=timeout)
+        while datetime.datetime.now() < end:
+            # wait for the autofocus analyser to start running
+            d = ps3_client.focus_status()
+            if d is None:
+                time.sleep(.1)
+                continue
+            status = PS3AutofocusStatus(d)
+            if not status.is_running:
+                time.sleep(.1)
+            else:
+                break
+        if datetime.datetime.now() >= end:
+            logger.error(f"{op}: autofocus analyser did not start within {timeout} seconds")
+            Filer().move_ram_to_shared(files)
+            self.unit.end_activity(UnitActivities.AutofocusingWIS)
+            return
+
+        while datetime.datetime.now() < end:
+            # wait for the autofocus analyser to stop running
+            s = ps3_client.focus_status()
+            status: PS3AutofocusStatus = PS3AutofocusStatus(s)
+            logger.info(f"{op}: {s=}")
+            if not status.is_running:
+                break
+            else:
+                time.sleep(.5)
+
+        if datetime.datetime.now() >= end:
+            logger.error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
+            ps3_client.close()
+            Filer().move_ram_to_shared(files)
+            self.unit.end_activity(UnitActivities.AutofocusingWIS)
+            return
+
         ps3_client.close()
 
-        if ps3_result.has_solution:
-            logger.info(f"{op}: ps3 found an autofocus solution with {ps3_result.best_focus_position=}")
-            logger.info(f"{op}: moving focuser to best focus position ...")
-            self.unit.focuser.position = ps3_result.best_focus_position
-            logger.info(f"{op}: waiting for focuser to stop moving ...")
-            while self.unit.focuser.is_active(FocuserActivities.Moving):
-                time.sleep(.5)
-            logger.info(f"{op}: focuser stopped moving")
+        if not status.analysis_result:
+            logger.error(f"{op}: focus analyser stopped working but empty analysis_result")
+            return
 
-            best_position = ps3_result.best_focus_position
-            self.unit.unit_conf['focuser']['known_as_good_position'] = best_position
-            try:
-                Config().set_unit(self.unit.hostname, self.unit.unit_conf)
-                logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
-                            f"focuser known-as-good-position {best_position}")
-            except Exception as e:
-                logger.error(f"could not save unit '{self.unit.hostname}' " +
-                             f"configuration for focuser known-as-good-position")
-        else:
-            logger.error(f"{op}: ps3 could not find an autofocus solution !!!")
+        if not status.analysis_result.has_solution:
+            logger.error(f"{op}: focus analyser did not find a solution")
+            return
+
+        result: PS3FocusAnalysisResult = status.analysis_result
+        logger.info(f"{op}: analysis result: " +
+                    f"{result.best_focus_position=}, {result.best_focus_star_diameter}")
+
+        position: int = int(result.best_focus_position)
+        logger.info(f"{op}: moving focuser to best focus position ...")
+        self.unit.focuser.known_as_good_position = position
+        self.unit.focuser.position = self.unit.focuser.known_as_good_position
+        logger.info(f"{op}: waiting for focuser to stop moving ...")
+        while self.unit.focuser.is_active(FocuserActivities.Moving):
+            time.sleep(.5)
+        logger.info(f"{op}: focuser stopped moving")
+        self.unit.unit_conf['focuser']['known_as_good_position'] = position
+        try:
+            Config().set_unit(self.unit.hostname, self.unit.unit_conf)
+            logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
+                        f"focuser known-as-good-position {position}")
+        except Exception:
+            logger.error(f"could not save unit '{self.unit.hostname}' " +
+                         f"configuration for focuser known-as-good-position")
 
         Filer().move_ram_to_shared(files)
-
         self.unit.end_activity(UnitActivities.AutofocusingWIS)
 
     def start_pwi4_autofocus(self):
@@ -242,7 +336,7 @@ class Autofocuser:
 
         if self.unit.is_active(UnitActivities.AutofocusingPWI4):
             if not self.unit.pw.status().autofocus.is_running:
-                logger.info("Cannot stop PlaneWave autofocus, it is not running")
+                logger.info("Cannot stop PWI4 autofocus, it is not running")
                 return
             self.unit.pw.request("/autofocus/stop")
             self.unit.end_activity(UnitActivities.AutofocusingPWI4)
