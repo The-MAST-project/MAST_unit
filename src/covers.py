@@ -118,6 +118,9 @@ class Covers(Component, SwitchedPowerDevice, AscomDispatcher):
 
     @property
     def state(self) -> CoversState:
+        if not self.connected:
+            return CoversState.NotPresent
+
         response = ascom_run(self, 'CoverState')
         if response.succeeded:
             return CoversState(response.value)
