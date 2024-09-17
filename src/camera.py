@@ -6,12 +6,12 @@ import time
 from logging import Logger
 
 import win32com.client
-from typing import List, Callable, NamedTuple
+from typing import List, Callable
 import logging
 from enum import IntFlag, auto, Enum
 from threading import Thread, Lock
 
-from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH
+from common.utils import RepeatTimer, time_stamp, BASE_UNIT_PATH, OperatingMode
 from common.utils import Component, CanonicalResponse, CanonicalResponse_Ok, function_name
 from common.paths import PathMaker
 from common.config import Config
@@ -164,10 +164,11 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
     def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
-    def __init__(self):
+    def __init__(self, operating_mode: OperatingMode = OperatingMode.Night):
         if self._initialized:
             return
 
+        self.operating_mode = operating_mode
         self.defaults = {
             'temp_check_interval': 15,
         }
@@ -177,11 +178,15 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         Component.__init__(self)
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Camera')
 
-        # if not self.is_on():
-        #     self.power_on()
+
 
         try:
-            self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
+            if self.operating_mode == OperatingMode.Night:
+                # if not self.is_on():
+                #     self.power_on()
+                self._ascom = win32com.client.Dispatch(self.conf['ascom_driver'])
+            else:
+                self._ascom = win32com.client.Dispatch('ASCOM.PlaneWaveVirtual.Camera')
         except Exception as ex:
             logger.exception(ex)
             raise ex

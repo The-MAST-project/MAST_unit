@@ -1,5 +1,6 @@
 import datetime
 import io
+import os
 from itertools import chain
 import logging
 import socket
@@ -18,18 +19,18 @@ from common.utils import RepeatTimer
 from threading import Thread
 from common.utils import Component, BASE_UNIT_PATH, UnitRoi
 from common.mast_logging import DailyFileHandler
-from common.utils import time_stamp, CanonicalResponse, CanonicalResponse_Ok, function_name
+from common.utils import time_stamp, CanonicalResponse, CanonicalResponse_Ok, function_name, OperatingMode
 from common.filer import Filer
 from common.config import Config
 from common.activities import UnitActivities, FocuserActivities, CameraActivities
 from common.activities import CoverActivities, StageActivities, MountActivities
-from enum import Enum
+from enum import Enum, auto
 from fastapi.routing import APIRouter
 from PIL import Image
 import ipaddress
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from autofocusing import Autofocuser
+from autofocusing import Autofocuser, AutofocusResult
 from solving import Solver
 from acquiring import Acquirer
 from guiding import Guider
@@ -42,20 +43,6 @@ class GuideDirections(Enum):
     guideSouth = 1
     guideEast = 2
     guideWest = 3
-
-
-class SolverResponse:
-    solved: bool
-    reason: str
-    ra: float
-    dec: float
-
-
-class AutofocusResult:
-    success: bool
-    best_position: float | None
-    tolerance: float | None
-    time_stamp: str
 
 
 class Unit(Component):
@@ -79,9 +66,13 @@ class Unit(Component):
 
         Component.__init__(self)
 
+        self.operating_mode = OperatingMode.Night
+        if 'UNIT_OPERATING_MODE' in os.environ:
+            self.operating_mode = OperatingMode.Day if os.environ['UNIT_OPERATING_MODE'].lower() == 'day' \
+                else OperatingMode.Night
+
         self._connected: bool = False
 
-        # Stuff for plate solving
         self.was_tracking_before_guiding: bool = False
 
         file_handler = [h for h in logger.handlers if isinstance(h, DailyFileHandler)]
@@ -101,13 +92,15 @@ class Unit(Component):
         self.autofocus_max_tolerance = self.unit_conf['autofocus']['max_tolerance']
         self.autofocus_try: int = 0
 
+        self.operating_mode: OperatingMode = OperatingMode.Night
+
         self.hostname = socket.gethostname()
         try:
             self.power_switch = PowerSwitchFactory.get_instance(
                 conf=self.unit_conf['power_switch'],
                 upload_outlet_names=True)
-            self.mount: Mount = Mount()
-            self.camera: Camera = Camera()
+            self.mount: Mount = Mount(self.operating_mode)
+            self.camera: Camera = Camera(self.operating_mode)
             self.covers: Covers = Covers()
             self.stage: Stage = Stage()
             self.focuser: Focuser = Focuser()
@@ -341,7 +334,7 @@ class Unit(Component):
                 self.end_activity(UnitActivities.ShuttingDown)
                 self._was_shut_down = True
 
-        # UnitActivities.Autofocusing
+        # UnitActivities.AutofocusingPWI4
         if self.is_active(UnitActivities.AutofocusingPWI4):
             autofocus_status = self.pw.status().autofocus
             if not autofocus_status:
@@ -612,7 +605,7 @@ router.add_api_route(base_path + '/abort', tags=[tag], endpoint=unit.abort)
 router.add_api_route(base_path + '/status', tags=[tag], endpoint=unit.status)
 router.add_api_route(base_path + '/connect', tags=[tag], endpoint=unit.connect)
 router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=unit.disconnect)
-router.add_api_route(base_path + '/start_autofocus', tags=[tag], endpoint=unit.autofocuser.start_pwi4_autofocus)
+router.add_api_route(base_path + '/start_pwi4_autofocus', tags=[tag], endpoint=unit.autofocuser.start_pwi4_autofocus)
 router.add_api_route(base_path + '/start_wis_autofocus', tags=[tag], endpoint=unit.autofocuser.start_wis_autofocus)
 router.add_api_route(base_path + '/stop_autofocus', tags=[tag], endpoint=unit.autofocuser.stop_autofocus)
 router.add_api_route(base_path + '/start_guiding_by_solving', tags=[tag], endpoint=unit.guider.start_guiding_by_solving)

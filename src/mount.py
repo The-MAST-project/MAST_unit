@@ -6,9 +6,8 @@ import win32com.client
 import logging
 
 from PlaneWave import pwi4_client
-from typing import List, NamedTuple
-from enum import IntFlag, auto
-from common.utils import Component, time_stamp, BASE_UNIT_PATH
+from typing import List
+from common.utils import Component, time_stamp, BASE_UNIT_PATH, OperatingMode
 from common.utils import RepeatTimer, CanonicalResponse, CanonicalResponse_Ok, function_name
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from common.config import Config
@@ -38,10 +37,11 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
     def ascom(self) -> win32com.client.Dispatch:
         return self._ascom
 
-    def __init__(self):
+    def __init__(self, operating_mode: OperatingMode = OperatingMode.Night):
         if self._initialized:
             return
 
+        self.operating_mode = operating_mode
         self.unit_conf: dict = Config().get_unit()
         self.conf = self.unit_conf['mount']
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Mount')
