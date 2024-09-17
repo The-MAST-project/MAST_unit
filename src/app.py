@@ -59,13 +59,10 @@ ensure_process_is_running(name='PWShutter.exe',
                           logger=logger,
                           shell=True)
 
-# daily_folder = PathMaker().make_daily_folder_name()
-# os.makedirs(daily_folder, exist_ok=True)
-# solver_stdout_file = os.path.join(daily_folder, 'solver-stdout.txt')
-# solver_stderr_file = os.path.join(daily_folder, 'solver-stderr.txt')
-ensure_process_is_running(name='ps3cli-20240829.exe',
-                          cwd='C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli',
-                          cmd=f'ps3cli-20240829.exe --server --port=9896',
+
+ensure_process_is_running(name='ps3cli.exe',
+                          cwd='C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli\\ps3cli-2024-09-10',
+                          cmd=f'ps3cli.exe --server --port=8998',
                           logger=logger,
                           shell=True)
 
@@ -74,7 +71,7 @@ from covers import router as covers_router
 from mount import router as mount_router
 from focuser import router as focuser_router
 from stage import router as stage_router
-from unit import router as unit_router
+from unit import router as unit_router, OperatingMode
 from unit import unit
 
 while True:
