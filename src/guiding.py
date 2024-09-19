@@ -79,6 +79,7 @@ class Guider:
             while self.unit.mount.is_slewing:
                 logger.info(f"{op}: waiting for mount to stop moving ...")
                 time.sleep(1)
+            time.sleep(5)
             logger.info(f"{op}: mount stopped moving")
 
         if folder is None:
