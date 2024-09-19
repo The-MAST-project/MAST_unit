@@ -14,6 +14,7 @@ from camera import CameraSettings, CameraBinning, ExposurePurpose
 from stage import StagePresetPosition
 from common.activities import UnitActivities, FocuserActivities
 from common.utils import UnitRoi
+from plotting import plot_autofocus_analysis
 
 logger = logging.getLogger('mast.unit.autofocusing')
 init_log(logger)
@@ -146,6 +147,7 @@ class Autofocuser:
         number_of_images    - How many images to take
         """
         op = function_name()
+        self.unit.errors = []
 
         self.unit.start_activity(UnitActivities.AutofocusingWIS)
 
@@ -159,6 +161,7 @@ class Autofocuser:
         if not target_ra or not target_dec:
             logger.info(f"{op}: no target position was supplied, not moving the mount")
         else:
+            logger.info(f"{op}: moving mount to {target_ra=}, {target_dec=} ...")
             self.unit.mount.goto_ra_dec_j2000(target_ra, target_dec)
 
         if not start_position:
@@ -166,12 +169,12 @@ class Autofocuser:
         focuser_position: int = start_position - ((number_of_images / 2) * ticks_per_step)
         self.unit.focuser.position = focuser_position
 
-        logger.debug(f"{op}: Waiting for components (stage, mount and focuser) to stop moving ...")
+        logger.debug(f"{op}: Waiting for components (stage, mount, focuser) to stop moving ...")
         while (self.unit.stage.is_moving or
                self.unit.mount.is_slewing or
                self.unit.focuser.is_active(FocuserActivities.Moving)):
             time.sleep(.5)
-        logger.debug(f"{op}: Components (stage, mount and focuser) stopped moving ...")
+        logger.debug(f"{op}: Components (stage, mount, focuser) stopped moving ...")
         if not self.unit.is_active(UnitActivities.AutofocusingWIS):
             logger.info("activity 'AutofocusingWIS' was stopped")
             return
@@ -186,115 +189,147 @@ class Autofocuser:
         _binning = CameraBinning(1, 1)
         autofocus_folder = PathMaker().make_autofocus_folder()
 
-        files: List[str] = []
-        for image_no in range(number_of_images):
-            autofocus_settings = CameraSettings(
-                seconds=exposure,
-                purpose=ExposurePurpose.Autofocus,
-                binning=_binning,
-                roi=unit_roi.to_camera_roi(binning=_binning),
-                gain=acquisition_conf['gain'],
-                image_path=os.path.join(autofocus_folder, f"FOCUS{int(focuser_position):05}.fits"),
-                save=True,
-            )
+        max_tries: int = self.unit.unit_conf['autofocus']['max_tries']
+        max_tolerance: float = self.unit.unit_conf['autofocus']['max_tolerance']
+        try_number: int
 
-            logger.info(f"{op}: starting exposure #{image_no} of {number_of_images} at {focuser_position=} ...")
-            self.unit.camera.do_start_exposure(autofocus_settings)
-            logger.info(f"{op}: waiting for exposure #{image_no} of {number_of_images} ...")
-            self.unit.camera.wait_for_image_saved()
-            files.append(self.unit.camera.latest_settings.image_path)
-            if not self.unit.is_active(UnitActivities.AutofocusingWIS):  # have we been stopped?
-                logger.info(f"{op}: activity 'AutofocusingWIS' was stopped")
+        for try_number in range(max_tries):
+
+            logger.info(f"{op}: starting autofocus try #{try_number} (of {max_tries})")
+            #
+            # Acquire images
+            #
+            files: List[str] = []
+            for image_no in range(number_of_images):
+                autofocus_settings = CameraSettings(
+                    seconds=exposure,
+                    purpose=ExposurePurpose.Autofocus,
+                    binning=_binning,
+                    roi=unit_roi.to_camera_roi(binning=_binning),
+                    gain=acquisition_conf['gain'],
+                    image_path=os.path.join(autofocus_folder, f"FOCUS{int(focuser_position):05}.fits"),
+                    save=True,
+                )
+
+                logger.info(f"{op}: starting exposure #{image_no} of {number_of_images} at {focuser_position=} ...")
+                self.unit.camera.do_start_exposure(autofocus_settings)
+                logger.info(f"{op}: waiting for exposure #{image_no} of {number_of_images} ...")
+                self.unit.camera.wait_for_image_saved()
+                files.append(self.unit.camera.latest_settings.image_path)
+                if not self.unit.is_active(UnitActivities.AutofocusingWIS):  # have we been stopped?
+                    logger.info(f"{op}: activity 'AutofocusingWIS' was stopped")
+                    return
+
+                focuser_position += ticks_per_step
+                logger.info(f"{op}: moving focuser by {ticks_per_step} ticks (to {focuser_position}) ...")
+                self.unit.focuser.position = focuser_position
+                while self.unit.focuser.is_active(FocuserActivities.Moving):
+                    time.sleep(.5)
+                logger.info(f"{op}: focuser stopped moving")
+
+                if not self.unit.is_active(UnitActivities.AutofocusingWIS):  # have we been stopped?
+                    logger.info(f"{op}: activity 'AutofocusingWIS' was stopped")
+                    return
+
+            # The files are now on the RAM disk
+
+            self.unit.start_activity(UnitActivities.AutofocusAnalysis)
+            ps3_client = PS3CLIClient()
+            ps3_client.connect('127.0.0.1', 8998)
+            ps3_client.begin_analyze_focus(files)
+
+            status: PS3AutofocusStatus | None = None
+            d: dict | None = None
+            timeout = 60
+            start = datetime.datetime.now()
+            end = start + datetime.timedelta(seconds=timeout)
+            while datetime.datetime.now() < end:
+                # wait for the autofocus analyser to start running
+                d = ps3_client.focus_status()
+                if d is None:
+                    time.sleep(.1)
+                    continue
+                status = PS3AutofocusStatus(d)
+                if not status.is_running:
+                    time.sleep(.1)
+                else:
+                    break
+            if datetime.datetime.now() >= end:
+                logger.error(f"{op}: autofocus analyser did not start within {timeout} seconds")
+                Filer().move_ram_to_shared(files)
+                self.unit.end_activity(UnitActivities.AutofocusAnalysis)
+                self.unit.end_activity(UnitActivities.AutofocusingWIS)
                 return
 
-            focuser_position += ticks_per_step
-            logger.info(f"{op}: moving focuser by {ticks_per_step} ticks (to {focuser_position}) ...")
-            self.unit.focuser.position = focuser_position
+            while datetime.datetime.now() < end:
+                # wait for the autofocus analyser to stop running
+                s = ps3_client.focus_status()
+                status: PS3AutofocusStatus = PS3AutofocusStatus(s)
+                logger.info(f"{op}: {s=}")
+                if not status.is_running:
+                    break
+                else:
+                    time.sleep(.5)
+
+            if datetime.datetime.now() >= end:
+                logger.error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
+                ps3_client.close()
+                Filer().move_ram_to_shared(files)
+                self.unit.end_activity(UnitActivities.AutofocusAnalysis)
+                continue  # next try_number
+
+            ps3_client.close()
+            self.unit.end_activity(UnitActivities.AutofocusAnalysis)
+
+            if not status.analysis_result:
+                logger.error(f"{op}: focus analyser stopped working but empty analysis_result")
+                continue  # next try_number
+
+            if not status.analysis_result.has_solution:
+                logger.error(f"{op}: focus analyser did not find a solution")
+                self.unit.end_activity(UnitActivities.AutofocusingWIS)
+                continue  # next try_number
+
+            #
+            # We have an analysis solution
+            #
+            result: PS3FocusAnalysisResult = status.analysis_result
+            logger.info(f"{op}: analysis result: " +
+                        f"{result.best_focus_position=}, {result.best_focus_star_diameter=}, {result.tolerance=}")
+
+            if result.tolerance > max_tolerance:
+                logger.info(f"{op}: {result.tolerance=} is higher than {max_tolerance=}, ignoring this solution")
+                continue  # next try_number
+
+            position: int = int(result.best_focus_position)
+            logger.info(f"{op}: moving focuser to best focus position {position} ...")
+            self.unit.focuser.known_as_good_position = position
+            self.unit.focuser.position = self.unit.focuser.known_as_good_position
+
+            logger.info(f"{op}: waiting for focuser to stop moving ...")
             while self.unit.focuser.is_active(FocuserActivities.Moving):
                 time.sleep(.5)
             logger.info(f"{op}: focuser stopped moving")
 
-            if not self.unit.is_active(UnitActivities.AutofocusingWIS):  # have we been stopped?
-                logger.info(f"{op}: activity 'AutofocusingWIS' was stopped")
-                return
+            self.unit.unit_conf['focuser']['known_as_good_position'] = position
+            try:
+                Config().set_unit(self.unit.hostname, self.unit.unit_conf)
+                logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
+                            f"focuser known-as-good-position {position}")
+            except Exception as e:
+                logger.error(f"could not save unit '{self.unit.hostname}' " +
+                             f"configuration for focuser known-as-good-position (exception: {e})")
 
-        # The files are now on the RAM disk
-
-        ps3_client = PS3CLIClient()
-        ps3_client.connect('127.0.0.1', 8998)
-        ps3_client.begin_analyze_focus(files)
-
-        status: PS3AutofocusStatus | None = None
-        d: dict | None = None
-        timeout = 60
-        start = datetime.datetime.now()
-        end = start + datetime.timedelta(seconds=timeout)
-        while datetime.datetime.now() < end:
-            # wait for the autofocus analyser to start running
-            d = ps3_client.focus_status()
-            if d is None:
-                time.sleep(.1)
-                continue
-            status = PS3AutofocusStatus(d)
-            if not status.is_running:
-                time.sleep(.1)
-            else:
-                break
-        if datetime.datetime.now() >= end:
-            logger.error(f"{op}: autofocus analyser did not start within {timeout} seconds")
             Filer().move_ram_to_shared(files)
-            self.unit.end_activity(UnitActivities.AutofocusingWIS)
-            return
+            pixel_scale: float = self.unit.unit_conf['camera']['pixel_scale_at_bin1']
+            Thread(name='autofocus-analysis-plotter', target=plot_autofocus_analysis,
+                   args=[result, autofocus_folder, pixel_scale]).start()
 
-        while datetime.datetime.now() < end:
-            # wait for the autofocus analyser to stop running
-            s = ps3_client.focus_status()
-            status: PS3AutofocusStatus = PS3AutofocusStatus(s)
-            logger.info(f"{op}: {s=}")
-            if not status.is_running:
-                break
-            else:
-                time.sleep(.5)
+            break  # the tries loop
 
-        if datetime.datetime.now() >= end:
-            logger.error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
-            ps3_client.close()
-            Filer().move_ram_to_shared(files)
-            self.unit.end_activity(UnitActivities.AutofocusingWIS)
-            return
+        if try_number == max_tries - 1:
+            logger.error(f"{op}: could not acieve {max_tolerance=} within {max_tries=}")
 
-        ps3_client.close()
-
-        if not status.analysis_result:
-            logger.error(f"{op}: focus analyser stopped working but empty analysis_result")
-            return
-
-        if not status.analysis_result.has_solution:
-            logger.error(f"{op}: focus analyser did not find a solution")
-            return
-
-        result: PS3FocusAnalysisResult = status.analysis_result
-        logger.info(f"{op}: analysis result: " +
-                    f"{result.best_focus_position=}, {result.best_focus_star_diameter}")
-
-        position: int = int(result.best_focus_position)
-        logger.info(f"{op}: moving focuser to best focus position ...")
-        self.unit.focuser.known_as_good_position = position
-        self.unit.focuser.position = self.unit.focuser.known_as_good_position
-        logger.info(f"{op}: waiting for focuser to stop moving ...")
-        while self.unit.focuser.is_active(FocuserActivities.Moving):
-            time.sleep(.5)
-        logger.info(f"{op}: focuser stopped moving")
-        self.unit.unit_conf['focuser']['known_as_good_position'] = position
-        try:
-            Config().set_unit(self.unit.hostname, self.unit.unit_conf)
-            logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
-                        f"focuser known-as-good-position {position}")
-        except Exception:
-            logger.error(f"could not save unit '{self.unit.hostname}' " +
-                         f"configuration for focuser known-as-good-position")
-
-        Filer().move_ram_to_shared(files)
         self.unit.end_activity(UnitActivities.AutofocusingWIS)
 
     def start_pwi4_autofocus(self):
