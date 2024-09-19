@@ -32,7 +32,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from autofocusing import Autofocuser, AutofocusResult
 from solving import Solver
-from acquiring import Acquirer
+from acquizition import Acquirer
 from guiding import Guider
 
 logger = logging.getLogger('mast.unit')
@@ -435,29 +435,37 @@ class Unit(Component):
             except Exception as e:
                 logger.error(f"websocket.send error: {e}")
 
-    def expose_roi(self,
-                   seconds: float | str = 3,
-                   fiber_x: int | str = 6000,
-                   fiber_y: int | str = 2500,
-                   width: int | str = 500,
-                   height: int | str = 300,
-                   binning: int | str = 1,
-                   gain: int | str = 170) -> CanonicalResponse:
+    def expose_with_roi(self,
+                        exposure_seconds: float | str = 3,
+                        repeats: int | str = 1,
+                        seconds_between_exposures: int | str = 0,
+                        fiber_x: int | str = 6000,
+                        fiber_y: int | str = 2500,
+                        width: int | str = 500,
+                        height: int | str = 300,
+                        binning: int | str = 1,
+                        gain: int | str = 170) -> CanonicalResponse:
 
         Thread(name='expose-roi-thread', target=self.do_expose_roi,
-               args=[seconds, fiber_x, fiber_y, width, height, binning, gain]).start()
+               args=[exposure_seconds, repeats, seconds_between_exposures, fiber_x, fiber_y, width, height, binning, gain]).start()
         return CanonicalResponse_Ok
 
     def do_expose_roi(self,
-                      seconds: float | str = 3,
+                      exposure_seconds: float | str = 3,
+                      repeats: int | str = 1,
+                      seconds_between_exposures: float | str = 0,
                       fiber_x: int | str = 6000,
                       fiber_y: int | str = 2500,
                       width: int | str = 1500,
                       height: int | str = 1300,
                       binning: int | str = 1,
                       gain: int | str = 170) -> CanonicalResponse:
+        op = function_name()
 
-        seconds = float(seconds) if isinstance(seconds, str) else seconds
+        seconds = float(exposure_seconds) if isinstance(exposure_seconds, str) else exposure_seconds
+        repeats = int(repeats) if isinstance(repeats, str) else repeats
+        seconds_between_exposures = float(seconds_between_exposures) \
+            if isinstance(seconds_between_exposures, str) else seconds_between_exposures
         fiber_x = int(fiber_x) if isinstance(fiber_x, str) else fiber_x
         fiber_y = int(fiber_y) if isinstance(fiber_y, str) else fiber_y
         width = int(width) if isinstance(width, str) else width
@@ -468,19 +476,31 @@ class Unit(Component):
         if _binning not in [1, 2, 4]:
             return CanonicalResponse(errors=[f"bad {_binning=}, should be 1, 2 or 4"])
 
-        unit_roi = UnitRoi(fiber_x, fiber_y, width, height)
-        binning: CameraBinning = CameraBinning(_binning, _binning)
-        context = camera.CameraSettings(
-            seconds=seconds,
-            purpose=ExposurePurpose.Exposure,
-            gain=gain,
-            binning=binning,
-            roi=unit_roi.to_camera_roi(binning=binning),
-            tags={'expose-roi': None},
-            save=True)
-        self.camera.do_start_exposure(context)
-        self.camera.wait_for_image_saved()
-        Filer().move_ram_to_shared(self.camera.latest_settings.image_path)
+        for repeat in range(repeats):
+            if seconds_between_exposures:
+                start = datetime.datetime.now()
+                end = start + datetime.timedelta(seconds=seconds_between_exposures)
+
+            unit_roi = UnitRoi(fiber_x, fiber_y, width, height)
+            binning: CameraBinning = CameraBinning(_binning, _binning)
+            context = camera.CameraSettings(
+                seconds=seconds,
+                purpose=ExposurePurpose.Exposure,
+                gain=gain,
+                binning=binning,
+                roi=unit_roi.to_camera_roi(binning=binning),
+                tags={'expose-roi': None},
+                save=True)
+            logger.info(f"{op}: starting exposure #{repeat} (of {repeats})")
+            self.camera.do_start_exposure(context)
+            self.camera.wait_for_image_saved()
+            Filer().move_ram_to_shared(self.camera.latest_settings.image_path)
+
+            if seconds_between_exposures:
+                period = (end - datetime.datetime.now()).seconds
+                logger.info(f"{op}: sleeping {period} seconds till next exposure ...")
+                time.sleep(period)
+
         return CanonicalResponse_Ok
 
     def test_stage_repeatability(self,
@@ -612,6 +632,8 @@ router.add_api_route(base_path + '/start_guiding_by_solving', tags=[tag], endpoi
 router.add_api_route(base_path + '/start_guiding_by_phase_correlation', tags=[tag],
                      endpoint=unit.guider.endpoint_start_guiding_by_cross_correlation)
 router.add_api_route(base_path + '/stop_guiding', tags=[tag], endpoint=unit.guider.stop_guiding)
-router.add_api_route(base_path + '/acquire', tags=[tag], endpoint=unit.acquirer.acquire)
-router.add_api_route(base_path + '/expose_roi', tags=[tag], endpoint=unit.expose_roi)
+router.add_api_route(base_path + '/start_acquisition', tags=[tag], endpoint=unit.acquirer.start_acquisition)
+router.add_api_route(base_path + '/start_one_solve_and_correct', tags=[tag],
+                     endpoint=unit.acquirer.start_one_solve_and_correct)
+router.add_api_route(base_path + '/expose_with_roi', tags=[tag], endpoint=unit.expose_with_roi)
 router.add_api_route(base_path + '/test_stage_repeatability', tags=[tag], endpoint=unit.test_stage_repeatability)
