@@ -167,7 +167,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
             self.pw.focuser_goto(value)
 
     def close_enough(self, position):
-        return abs(self.position - position) <= 1
+        return abs(self.position - position) <= 2
 
     def set_position(self, position: int | str):
         """
