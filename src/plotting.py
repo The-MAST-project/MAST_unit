@@ -1,3 +1,4 @@
+import json
 import logging
 
 import numpy as np
@@ -7,10 +8,17 @@ import sys
 import os
 from common.mast_logging import init_log
 from common.utils import function_name, Filer
+from common.corrections import correction_phases, Correction, Corrections
 from typing import List, NamedTuple
+from astropy.coordinates import Angle
+import astropy.units as u
+import datetime
 
 logger = logging.Logger('mast.unit.' + __name__)
 init_log(logger)
+
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
 
 
 # Function to determine if the environment is interactive
@@ -100,9 +108,6 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     plt.grid(True)
     plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [tolerance_label], loc='upper right', framealpha=1)
 
-    # if is_interactive():
-    #     plt.show()
-
     if folder:
         file: str = os.path.join(folder, 'vcurve.png')
         logger.info(f"{op}: saved plot in {file}")
@@ -112,6 +117,87 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     plt.show()
 
 
+def plot_corrections(acquisition_folder: str | None = None):
+    """
+    Plots the existing corrections.json files underneath a given Acquisition folder
+
+    :param acquisition_folder: An Acquisition folder.  If not given, finds the latest available one.
+    :return:
+    """
+    op = function_name()
+
+    def has_corrections(_folder: str) -> bool:
+        for _phase in correction_phases:
+            if os.path.exists(os.path.join(_folder, _phase, 'corrections.json')):
+                return True
+        return False
+
+    target_folder = None
+    if acquisition_folder is not None:
+        target_folder = acquisition_folder
+
+    if target_folder is None:
+        while target_folder is None:
+            latest_acquisition_folders = Filer().find_latest(Filer().shared.root, pattern='*,target=*')
+            if not latest_acquisition_folders:
+                logger.error(f"{op}: Could not find acquisition folders under '{Filer().shared.root}'")
+                return
+            for folder in latest_acquisition_folders:
+                if has_corrections(folder):
+                    target_folder = folder
+                    break
+
+    if target_folder is None:
+        logger.error(f"{op}: Could not find an acquisition folder with corrections under '{Filer().shared.root}'")
+        return
+
+    for phase in ['sky', 'spec', 'guiding']:
+        file = os.path.join(target_folder, phase, 'corrections.json')
+        if not os.path.isfile(file):
+            continue
+
+        corrections: Corrections | None = None
+        try:
+            with open(file) as fp:
+                corrections: Corrections = Corrections.from_dict(json.load(fp))
+        except Exception as e:
+            logger.error(f"{op}: Could not get corrections from {file} ({e=})")
+            continue
+
+        if not corrections:
+            continue
+
+        sequence = corrections.sequence
+        if corrections.last_delta:
+            sequence.append(corrections.last_delta)
+
+        start: datetime.datetime = sequence[0].time
+        end: datetime.datetime = sequence[-1].time
+        t = [(corr.time - start).seconds for corr in sequence]
+        ra_deltas = [corr.ra_delta for corr in sequence]
+        dec_deltas = [corr.dec_delta for corr in sequence]
+
+        plt.plot(t, ra_deltas, color='blue', label='Ra')
+        plt.axhline(y=corrections.tolerance_ra, color='blue', linestyle=':')
+        plt.plot(t, dec_deltas, color='green', label='Dec')
+        plt.axhline(y=corrections.tolerance_dec, color='blue', linestyle=':')
+
+        start_label = Patch(color='none', label=f"Start: {start}")
+        end_label = Patch(color='none', label=f"End:   {end}")
+        plt.xlabel('Delta time (seconds)')
+        plt.ylabel('Corrections (asec)')
+        plt.title(f"{phase.capitalize()}", loc='left')
+        plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [start_label, end_label],
+                   loc='lower right', framealpha=1)
+        plt.grid()
+
+        plt.savefig(file.replace('.json', '.png'), format='png')
+        plt.show()
+
+
+#
+# Unit tests
+#
 class FocusSample:
     def __init__(self, is_valid: bool, focus_position: int, num_stars: int, star_rms_diameter_pixels: float):
         self.is_valid = is_valid
@@ -137,6 +223,11 @@ class DummyResult:
         ]
 
 
+class Coord:
+    def __init__(self, ra: float, dec: float):
+        self.ra = Angle(ra * u.hourangle, dec * u.deg)
+
+
 class DummyStatus:
 
     def __init__(self):
@@ -145,6 +236,36 @@ class DummyStatus:
         self.analysis_result = DummyResult()
 
 
-if __name__ == '__main__':
+def test_corrections_plot():
 
-    plot_autofocus_analysis(DummyResult(), 'C:\\Temp')
+    start = datetime.datetime.now()
+    dt = [0, 32, 65, 96, 128, 159, 190, 221, 252, 285, 316, 347, 378, 411, 442, 473, 506, 539, 572, 603]
+    d_ra = [10.5, 9.662, 9.144, 8.794, 8.589, 6.990, 6.453, 5.682, 4.947, 4.780, 4.429, 3.444, 3.005,
+            2.457, 2.294, 1.684, 1.151, 0.904, 0.896, 0.3]
+    d_dec = [2.3, 1.937, 1.555, 1.348, 1.199, 0.593, 0.521, 0.468, 0.434, 0.273, 0.27, 0.27, 0.27,
+             0.27, 0.27, 0.27, 0.27, 0.27, 0.27, 0.27]
+    dummy = {
+        'target': {
+            'ra': 14.5,
+            'dec': 32.75,
+        },
+        'sequence': []
+    }
+    for i in range(len(dt)):
+        dummy['sequence'].append({
+            'time': (start + datetime.timedelta(seconds=dt[i])).isoformat(),
+            'ra_delta': d_ra[i],
+            'dec_delta': d_dec[i],
+        })
+
+    with open('C:\\Temp\\corrections.json', 'w') as f:
+        json.dump(dummy, f, indent=2)
+    plot_corrections('C:\\Temp\\corrections.json')
+
+
+if __name__ == '__main__':
+    acq_folder = Filer().find_latest(Filer().shared.root, pattern='*,target=*', qualifier=os.path.isdir)
+    plot_corrections(acq_folder)
+    # plot_autofocus_analysis(DummyResult(), 'C:\\Temp')
+    # test_corrections_plot()
+    pass

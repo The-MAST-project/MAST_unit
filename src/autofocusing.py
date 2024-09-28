@@ -10,7 +10,7 @@ import time
 import os
 from typing import List
 from PlaneWave.ps3cli_client import PS3CLIClient
-from camera import CameraSettings, CameraBinning, ExposurePurpose
+from camera import CameraSettings, CameraBinning
 from stage import StagePresetPosition
 from common.activities import UnitActivities, FocuserActivities
 from common.utils import UnitRoi
@@ -203,7 +203,6 @@ class Autofocuser:
             for image_no in range(number_of_images):
                 autofocus_settings = CameraSettings(
                     seconds=exposure,
-                    purpose=ExposurePurpose.Autofocus,
                     binning=_binning,
                     roi=unit_roi.to_camera_roi(binning=_binning),
                     gain=acquisition_conf['gain'],

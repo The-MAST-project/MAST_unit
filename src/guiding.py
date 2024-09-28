@@ -5,7 +5,7 @@ from common.filer import Filer
 from common.mast_logging import init_log
 from common.activities import UnitActivities
 from common.utils import UnitRoi
-from camera import CameraSettings, CameraBinning, ExposurePurpose
+from camera import CameraSettings, CameraBinning
 import astropy.units as u
 from astropy.coordinates import Angle
 import time
@@ -35,23 +35,33 @@ class Guider:
         logger.info(f'guiding ended')
 
     def make_guiding_settings(self, base_folder: str | None = None) -> CameraSettings:
+        """
+        The 'guiding' camera exposure settings are used:
+        -In the second acquisition phase (stage at 'spec' position)
+        - While guiding
+
+        :param base_folder:
+        :return: camera settings for guiding exposures
+        """
 
         guiding_conf = self.unit.unit_conf['guiding']
-        guiding_roi: UnitRoi = UnitRoi(
-            fiber_x=guiding_conf['fiber_x'],
-            fiber_y=guiding_conf['fiber_y'],
-            width=guiding_conf['width'],
-            height=guiding_conf['height']
-        )
-        binning: CameraBinning = CameraBinning(guiding_conf['binning'], guiding_conf['binning'])
+
+        h_margin = 300  # right and left
+        v_margin = 200  # top and bottom
+
+        unit_roi = UnitRoi.from_dict(guiding_conf['roi'])  # we use only the center and compute the sizes
+        unit_roi.width = (min(unit_roi.fiber_x, self.unit.camera.cameraXSize - unit_roi.fiber_x) - h_margin) * 2
+        unit_roi.height = (min(unit_roi.fiber_y, self.unit.camera.cameraYSize - unit_roi.fiber_y) - v_margin) * 2
+
+        x_binning = guiding_conf['binning']
+        binning: CameraBinning = CameraBinning(x_binning, x_binning)
 
         return CameraSettings(
-            purpose=ExposurePurpose.Guiding,
             seconds=guiding_conf['exposure'],
             base_folder=base_folder,
             gain=guiding_conf['gain'],
             binning=binning,
-            roi=guiding_roi.to_camera_roi(binning=binning),
+            roi=unit_roi.to_camera_roi(binning=binning),
             save=True
         )
 
@@ -74,41 +84,40 @@ class Guider:
             logger.info(f"{op}: guiding at current coordinates {target}")
         else:
             logger.info(f"{op}: sending telescope to {target} before guiding ...")
-            self.unit.mount.goto_ra_dec_j2000(target.ra.hours, target.dec.degs)
-            time.sleep(2)
+            self.unit.mount.goto_ra_dec_j2000(target.ra.hour, target.dec.deg)
+            logger.info(f"{op}: waiting for mount to stop moving ...")
             while self.unit.mount.is_slewing:
-                logger.info(f"{op}: waiting for mount to stop moving ...")
                 time.sleep(1)
+            logger.info(f"{op}: waiting 5 for mount to stop moving ...")
             time.sleep(5)
             logger.info(f"{op}: mount stopped moving")
 
         if folder is None:
             folder = PathMaker().make_guidings_folder()
 
-        guiding_settings = self.make_guiding_settings()
-        guiding_settings.base_folder = folder
+        guiding_settings = self.make_guiding_settings(folder)
 
-        cadence: float = self.unit.unit_conf['guiding']['cadence']
-        arc_seconds: float = self.unit.unit_conf['guiding']['tolerance'] if ('tolerance' in
-                                                                             self.unit.unit_conf['guiding']) else .3
+        guiding_conf = self.unit.unit_conf['guiding']
+        cadence: float = guiding_conf['cadence_seconds']
+        arc_seconds: float = guiding_conf['tolerance']['ra_arcsec'] if \
+            ('tolerance' in guiding_conf and 'ra_arcsec' in guiding_conf['tolerance']) else .3
         tolerance = Angle(arc_seconds * u.arcsec)
 
         self.unit.start_activity(UnitActivities.Guiding)
-
         while self.unit.is_active(UnitActivities.Guiding):
             start = datetime.datetime.now()
             end = start + datetime.timedelta(seconds=cadence)
-            self.unit.solver.solve_and_correct(
-                target=target,
-                exposure_settings=guiding_settings,
-                solving_tolerance=SolvingTolerance(tolerance, tolerance),
-                caller=op,
-                parent_activity=UnitActivities.Guiding,
-            )
+            self.unit.solver.solve_and_correct(target=target,
+                                               camera_settings=guiding_settings,
+                                               solving_tolerance=SolvingTolerance(tolerance, tolerance),
+                                               phase='guiding',
+                                               parent_activity=UnitActivities.Guiding)
 
             now = datetime.datetime.now()
             if now < end:
                 time.sleep((end - now).seconds)
+
+        self.unit.acquirer.latest_acquisition.save_corrections('guiding')
 
     def do_guide_by_solving_without_shm(self, base_folder: str | None = None):
         def guiding_was_stopped() -> bool:
@@ -160,7 +169,6 @@ class Guider:
         )
         binning: CameraBinning = CameraBinning(guiding_conf['binning'], guiding_conf['binning'])
         guiding_settings: CameraSettings = CameraSettings(
-            purpose=ExposurePurpose.Guiding,
             seconds=guiding_conf['exposure'],
             base_folder=base_folder,
             gain=guiding_conf['gain'],
@@ -347,7 +355,7 @@ class Guider:
 
     def start_guiding_by_solving(self, ra_j2000_hours: float, dec_j2000_degs: float):
         """
-        Starts the ``autoguide`` routine
+        Starts ``guiding`` by periodically exposing, plate-solving and correcting the mount
 
         :mastapi:
         """
@@ -396,8 +404,7 @@ class Guider:
             logger.error(error)
             return CanonicalResponse(errors=[error])
 
-        if self.unit.is_active(UnitActivities.Guiding):
-            self.unit.end_activity(UnitActivities.Guiding)
+        self.unit.end_activity(UnitActivities.Guiding)
 
         if not self.unit.was_tracking_before_guiding:
             self.unit.mount.stop_tracking()
@@ -413,7 +420,7 @@ class Guider:
 
     @property
     def guiding(self) -> bool:
-        return self.unit.is_active(UnitActivities.Guiding)
+        return self.is_guiding()
 
     def endpoint_start_guiding_by_cross_correlation(self):
         Thread(name='shift-analysis-guider', target=self.do_start_guiding_by_cross_correlation).start()
@@ -440,7 +447,6 @@ class Guider:
 
         binning: CameraBinning = CameraBinning(guiding_conf['binning'], guiding_conf['binning'])
         guiding_settings: CameraSettings = CameraSettings(
-            purpose=ExposurePurpose.Exposure,
             seconds=guiding_conf['exposure'],
             base_folder=base_folder,
             gain=guiding_conf['gain'],

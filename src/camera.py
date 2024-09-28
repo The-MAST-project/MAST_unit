@@ -45,21 +45,13 @@ class AscomCameraState(IntFlag):
     Error = 5
 
 
-class ExposurePurpose(Enum):
-    Exposure = auto(),
-    Acquisition = auto()
-    Guiding = auto()
-    Autofocus = auto()
-
-
 class CameraSettings:
     """
 
-    Multipurpose exposure context
+    Multipurpose camera exposure context
 
     Callers to start_exposure() fill in:
     - seconds - duration in seconds
-    - purpose - one of the ExposurePurposes
     - base_folder - [optional] supplied folder under which the new folder/file will reside
     - gain - to be applied to the camera by start_exposure()
     - binning - ditto
@@ -80,7 +72,6 @@ class CameraSettings:
     """
     def __init__(self,
                  seconds: float,
-                 purpose: ExposurePurpose = ExposurePurpose.Exposure,
                  gain: float | None = None,
                  binning: CameraBinning | None = None,
                  roi: CameraRoi | None = None,
@@ -92,9 +83,8 @@ class CameraSettings:
                  ):
 
         self.seconds: float = seconds
-        self.purpose: ExposurePurpose = purpose
         self.base_folder: str | None = base_folder
-        self.image_path: str | None = None
+        self.image_path: str | None = image_path
         self.binning: CameraBinning | None = binning
         self.gain: float | None = gain
         self.roi: CameraRoi | None = roi
@@ -102,45 +92,45 @@ class CameraSettings:
         self.save: bool = save
         self.fits_cards: dict | None = fits_cards
         self.start: datetime.datetime = datetime.datetime.now()
+        self.file_name_parts: List[str] = []
 
         if self.save:
-            if image_path:
-                self.image_path = image_path
+            if self.image_path is not None:
                 os.makedirs(os.path.dirname(self.image_path), exist_ok=True)
+            elif self.base_folder is not None:
+                self.folder = self.base_folder
+                os.makedirs(self.folder, exist_ok=True)
+                self.make_file_name()
             else:
-                folder = ''
-                if self.base_folder is not None:
-                    #
-                    # These settings were supplied with a base_folder, so the new folder or file
-                    #  must reside under that base_folder
-                    #
-                    folder = self.base_folder
-                else:
-                    #
-                    # We were not supplied a base_folder, we'll just make a next-in-line
-                    #
-                    if self.purpose == ExposurePurpose.Acquisition:
-                        folder = PathMaker().make_acquisition_folder()
-                    elif self.purpose == ExposurePurpose.Exposure:
-                        folder = PathMaker().make_exposures_folder()
-                    elif self.purpose == ExposurePurpose.Guiding:
-                        folder = PathMaker().make_guidings_folder()
+                raise Exception(f"CameraSettings:__init__(): either 'image_path' or 'base_folder' MUST be supplied")
 
-                    os.makedirs(folder, exist_ok=True)
+    def make_file_name(self, additional_tags: dict | None = None):
+        """
+        Makes the file part of the image path.  This will:
+        - generate current seq= and time= file name parts
+        - prepend optional additional_tags to those passed to the constructor
 
-                    parts: List[str] = [
-                        f"seq={PathMaker().make_seq(folder)}",
-                        f"time={PathMaker().current_utc()}",
-                    ]
-                    if self.tags:
-                        for k, v in self.tags.items():
-                            parts.append(f"{k}" if v is None else f"{k}={v}")
-                    parts.append(f"seconds={self.seconds}")
-                    parts.append(f"binning={self.binning}")
-                    parts.append(f"gain={self.gain}")
-                    parts.append(f"roi={self.roi}")
+        :param additional_tags: tags specific to THIS making of the file name
+        :return:
+        """
+        self.file_name_parts = []
+        self.file_name_parts.append(f"seq={PathMaker().make_seq(self.folder, start_with=-1)}")
+        self.file_name_parts.append(f"time={PathMaker().current_utc()}")
 
-                    self.image_path = os.path.join(folder, ','.join(parts) + '.fits')
+        tags = {}
+        if additional_tags:
+            tags = additional_tags
+        if self.tags:
+            tags += self.tags
+        for k, v in tags.items():
+            self.file_name_parts.append(f"{k}" if v is None else f"{k}={v}")
+
+        self.file_name_parts.append(f"seconds={self.seconds}")
+        self.file_name_parts.append(f"binning={self.binning}")
+        self.file_name_parts.append(f"gain={self.gain}")
+        self.file_name_parts.append(f"roi={self.roi}")
+
+        self.image_path = os.path.join(self.folder, ','.join(self.file_name_parts) + '.fits')
 
 
 class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
@@ -177,8 +167,6 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
         self.conf = self.unit_conf['camera']
         Component.__init__(self)
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Camera')
-
-
 
         try:
             if self.operating_mode == OperatingMode.Night:
@@ -407,11 +395,15 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
                                 width: int | None = None,
                                 height: int | None = None):
 
+        if isinstance(binning, str):
+            binning = int(binning)
         roi = CameraRoi(center_x, center_y, width, height) if all([center_x, center_y, width, height]) else None
-        context = CameraSettings(seconds=float(seconds) if isinstance(seconds, str) else seconds,
-                                 purpose=ExposurePurpose.Exposure, gain=int(gain) if isinstance(gain, str) else gain,
-                                 binning=CameraBinning(int(binning), int(binning)) if isinstance(binning, str) else
-                                 CameraBinning(binning, binning), roi=roi, tags=None, save=True)
+        context = CameraSettings(
+            seconds=float(seconds) if isinstance(seconds, str) else seconds,
+            base_folder=PathMaker().make_exposures_folder(),
+            gain=int(gain) if isinstance(gain, str) else gain,
+            binning=CameraBinning(binning, binning),
+            roi=roi, tags=None, save=True)
 
         # self.do_start_exposure(purpose=ExposurePurpose.Exposure, tags=None, seconds=seconds, gain=gain,
         #   binning=binning, save=True)
@@ -783,7 +775,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
 
         ret = []
         if not self.switch.detected:
-            ret.append(f"{label}: power switch '{self.switch.name}' " +
+            ret.append(f"{label}: power switch '{self.switch.hostname}' " +
                        f"(at '{self.switch.destination.ipaddr}') not detected")
         elif not self.is_on():
             ret.append(f"{label}: not powered")

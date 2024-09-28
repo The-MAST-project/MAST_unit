@@ -306,6 +306,7 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
         while not st.mount.is_tracking:
             time.sleep(1)
             st = self.pw.status()
+        logger.info("started tracking")
         return CanonicalResponse_Ok
 
     def stop_tracking(self):
@@ -322,6 +323,7 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
         while st.mount.is_tracking:
             time.sleep(1)
             st = self.pw.status()
+        logger.info("stopped tracking")
         return CanonicalResponse_Ok
 
     def goto_ra_dec_j2000(self, ra: float, dec: float):

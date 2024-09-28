@@ -9,7 +9,7 @@ import camera
 from PlaneWave import pwi4_client
 import time
 from typing import List, Any
-from camera import Camera, CameraBinning, ExposurePurpose
+from camera import Camera, CameraBinning
 from covers import Covers
 from stage import Stage
 from mount import Mount
@@ -24,7 +24,9 @@ from common.filer import Filer
 from common.config import Config
 from common.activities import UnitActivities, FocuserActivities, CameraActivities
 from common.activities import CoverActivities, StageActivities, MountActivities
-from enum import Enum, auto
+from common.corrections import correction_phases
+from common.paths import PathMaker
+from enum import Enum
 from fastapi.routing import APIRouter
 from PIL import Image
 import ipaddress
@@ -32,7 +34,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from autofocusing import Autofocuser, AutofocusResult
 from solving import Solver
-from acquizition import Acquirer
+from acquirer import Acquirer
 from guiding import Guider
 
 logger = logging.getLogger('mast.unit')
@@ -136,6 +138,16 @@ class Unit(Component):
         # self.camera.register_visualizer('image-to-dashboard', self.push_image_to_dashboards)
 
         self.errors: List[str] = []
+
+        # corrections for each acquisition phase
+        # self.corrections: Dict[str, dict] = {}
+        # for phase in ['sky', 'spec', 'guiding', 'testing']:
+        #     self.corrections[phase] = {
+        #         'target': {'ra': None, 'dec': None},
+        #         'tolerance': {'ra': None, 'dec': None},
+        #         'sequence': [],
+        # }
+        # self.corrections: Dict[str, Corrections] | None = None
 
         # self.latest_solver_result: PS3SolvingResult | None = None
 
@@ -260,6 +272,22 @@ class Unit(Component):
                 'tolerance': self.autofocus_result.tolerance,
                 'time_stamp': self.autofocus_result.time_stamp
             }
+
+        # if (self.corrections and 'target' in self.corrections and 'ra' in self.corrections['target']
+        #         and 'sequence' in self.corrections):
+        #     ret['corrections'] = {
+        #         'target': {
+        #             'ra': self.corrections['target']['ra'],
+        #             'dec': self.corrections['target']['dec'],
+        #         },
+        #         'sequence': self.corrections['sequence'],
+        #     }
+        if self.acquirer.latest_acquisition and self.acquirer.latest_acquisition.corrections:
+            corrections = self.acquirer.latest_acquisition.corrections
+            ret['corrections'] = [corrections[phase].to_dict() for phase in correction_phases if phase in corrections]
+
+        if self.errors:
+            ret['errors'] = self.errors
 
         ret['powered'] = True
         ret['type'] = 'full'
@@ -439,13 +467,18 @@ class Unit(Component):
                         exposure_seconds: float | str = 3,
                         repeats: int | str = 1,
                         seconds_between_exposures: int | str = 0,
-                        fiber_x: int | str = 6000,
-                        fiber_y: int | str = 2500,
-                        width: int | str = 500,
-                        height: int | str = 300,
+                        fiber_x: int | str | None = None,
+                        fiber_y: int | str | None = None,
+                        width: int | str | None = None,
+                        height: int | str | None = None,
                         binning: int | str = 1,
                         gain: int | str = 170) -> CanonicalResponse:
 
+        if fiber_x is None and fiber_y is None and width is None and height is None:
+            width = self.camera.cameraXSize
+            height = self.camera.cameraYSize
+            fiber_x = int(width / 2)
+            fiber_y = int(height / 2)
         Thread(name='expose-roi-thread', target=self.do_expose_roi,
                args=[exposure_seconds, repeats, seconds_between_exposures, fiber_x, fiber_y, width, height, binning, gain]).start()
         return CanonicalResponse_Ok
@@ -485,7 +518,7 @@ class Unit(Component):
             binning: CameraBinning = CameraBinning(_binning, _binning)
             context = camera.CameraSettings(
                 seconds=seconds,
-                purpose=ExposurePurpose.Exposure,
+                base_folder=PathMaker().make_exposures_folder(),
                 gain=gain,
                 binning=binning,
                 roi=unit_roi.to_camera_roi(binning=binning),
@@ -547,6 +580,7 @@ class Unit(Component):
             # expose at reference
             exposure_settings = camera.CameraSettings(
                 seconds=exposure_seconds,
+                base_folder=PathMaker().make_exposures_folder(),
                 gain=gain,
                 binning=CameraBinning(binning, binning),
                 roi=None,
@@ -568,6 +602,7 @@ class Unit(Component):
 
             exposure_settings = camera.CameraSettings(
                 seconds=exposure_seconds,
+                base_folder=PathMaker().make_exposures_folder(),
                 gain=gain,
                 binning=CameraBinning(binning, binning),
                 roi=None,
