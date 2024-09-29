@@ -75,6 +75,9 @@ class Guider:
         """
         op: str = function_name()
 
+        #
+        # Target: either given or taken from the mount
+        #
         if target is None:
             pw4_status = self.unit.pw.status()
             target = Coord(
@@ -92,17 +95,29 @@ class Guider:
             time.sleep(5)
             logger.info(f"{op}: mount stopped moving")
 
+        #
+        # Images folder, either given (part of an acquisition sequence) or under 'Guidings'
+        #
         if folder is None:
             folder = PathMaker().make_guidings_folder()
 
+        #
+        # Camera settings
+        #
         guiding_settings = self.make_guiding_settings(folder)
 
+        #
+        # Cadence and tolerances
+        #
         guiding_conf = self.unit.unit_conf['guiding']
         cadence: float = guiding_conf['cadence_seconds']
         arc_seconds: float = guiding_conf['tolerance']['ra_arcsec'] if \
             ('tolerance' in guiding_conf and 'ra_arcsec' in guiding_conf['tolerance']) else .3
         tolerance = Angle(arc_seconds * u.arcsec)
 
+        #
+        # All is ready, start guiding
+        #
         self.unit.start_activity(UnitActivities.Guiding)
         while self.unit.is_active(UnitActivities.Guiding):
             start = datetime.datetime.now()
@@ -115,7 +130,9 @@ class Guider:
 
             now = datetime.datetime.now()
             if now < end:
-                time.sleep((end - now).seconds)
+                sec = (end - now).seconds
+                logger.info(f"sleeping {sec} seconds till end-of-cadence ...")
+                time.sleep(sec)
 
         self.unit.acquirer.latest_acquisition.save_corrections('guiding')
 
