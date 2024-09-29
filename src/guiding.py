@@ -19,7 +19,7 @@ from threading import Thread
 
 from skimage.registration import phase_cross_correlation
 
-logger = logging.Logger('mast.unit.guiding')
+logger = logging.Logger('mast.unit.' + __name__)
 init_log(logger)
 
 guider_address_port = ('127.0.0.1', 8001)

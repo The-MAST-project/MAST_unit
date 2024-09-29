@@ -25,8 +25,8 @@ unit_conf = Config().get_unit(socket.gethostname())
 # else:
 log_level = logging.DEBUG
 logging.basicConfig(level=log_level)
-logger = logging.getLogger('mast.unit')
-init_log(logger, level=log_level, file_name='unit-log')
+logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 logger.info('+--------------+')
 logger.info('| Starting ... |')

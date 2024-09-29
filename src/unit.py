@@ -18,7 +18,7 @@ from dlipower.dlipower.dlipower import SwitchedPowerDevice, PowerSwitchFactory
 from common.utils import RepeatTimer
 from threading import Thread
 from common.utils import Component, BASE_UNIT_PATH, UnitRoi
-from common.mast_logging import DailyFileHandler
+from common.mast_logging import DailyFileHandler, init_log
 from common.utils import time_stamp, CanonicalResponse, CanonicalResponse_Ok, function_name, OperatingMode
 from common.filer import Filer
 from common.config import Config
@@ -38,6 +38,7 @@ from acquirer import Acquirer
 from guiding import Guider
 
 logger = logging.getLogger('mast.unit')
+init_log(logger)
 
 
 class GuideDirections(Enum):

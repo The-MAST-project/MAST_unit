@@ -16,7 +16,7 @@ from common.activities import UnitActivities, FocuserActivities
 from common.utils import UnitRoi
 from plotting import plot_autofocus_analysis
 
-logger = logging.getLogger('mast.unit.autofocusing')
+logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
 
 

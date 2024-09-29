@@ -15,7 +15,7 @@ from threading import Thread
 from acquisition import Acquisition
 import os
 
-logger = logging.Logger('mast.unit.acquirer')
+logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
 
 

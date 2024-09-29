@@ -18,12 +18,11 @@ import astropy.units as u
 import datetime
 from multiprocessing.shared_memory import SharedMemory
 import numpy as np
-from plotting import plot_corrections
 import json
 
 PLATE_SOLVING_SHM_NAME = 'PlateSolving_Image'
 
-logger = logging.Logger('mast.unit.solving')
+logger = logging.Logger('mast.unit.' + __name__)
 init_log(logger)
 
 

@@ -184,15 +184,17 @@ def plot_corrections(acquisition_folder: str | None = None):
 
         start_label = Patch(color='none', label=f"Start: {start}")
         end_label = Patch(color='none', label=f"End:   {end}")
-        plt.xlabel('Delta time (seconds)')
+        plt.xlabel('Delta time (sec)')
         plt.ylabel('Corrections (asec)')
         plt.title(f"{phase.capitalize()}", loc='left')
         plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [start_label, end_label],
                    loc='lower right', framealpha=1)
         plt.grid()
 
-        plt.savefig(file.replace('.json', '.png'), format='png')
-        plt.show()
+        file = file.replace('.json', '.png')
+        plt.savefig(file, format='png')
+        logger.info(f"plot saved to '{file}'")
+        # plt.show()
 
 
 #

@@ -7,13 +7,15 @@ from typing import List
 
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH
 from common.config import Config
-from dlipower.dlipower.dlipower import SwitchedPowerDevice, make_power_conf
+from common.mast_logging import init_log
+from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 
 from common.ascom import ascom_run, AscomDispatcher
 from common.activities import CoverActivities
 
 logger: logging.Logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 
 # https://ascom-standards.org/Help/Developer/html/T_ASCOM_DeviceInterface_CoverStatus.htm

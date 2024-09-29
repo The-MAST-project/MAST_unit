@@ -5,6 +5,7 @@ import win32com.client
 
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok, BASE_UNIT_PATH
 from common.config import Config
+from common.mast_logging import init_log
 from PlaneWave import pwi4_client
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
@@ -12,6 +13,7 @@ from common.ascom import ascom_run, AscomDispatcher
 from common.activities import FocuserActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 
 class FocusDirection(IntEnum):

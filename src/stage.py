@@ -8,6 +8,7 @@ from typing import List
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok
 from common.utils import BASE_UNIT_PATH, function_name
 from common.config import Config
+from common.mast_logging import init_log
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 import os
 import sys
@@ -33,6 +34,7 @@ if platform.system() == "Windows":
     from pyximc import lib as ximclib
 
 logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 
 class StageDirection(IntEnum):

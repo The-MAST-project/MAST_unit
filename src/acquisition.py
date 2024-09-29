@@ -8,7 +8,7 @@ import json
 from common.filer import Filer
 from typing import Dict
 
-logger = logging.Logger('mast.unit.acquirer')
+logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
 
 

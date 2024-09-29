@@ -1,5 +1,4 @@
 import time
-import typing
 from logging import Logger
 
 import win32com.client
@@ -8,7 +7,8 @@ import logging
 from PlaneWave import pwi4_client
 from typing import List
 from common.utils import Component, time_stamp, BASE_UNIT_PATH, OperatingMode
-from common.utils import RepeatTimer, CanonicalResponse, CanonicalResponse_Ok, function_name
+from common.utils import RepeatTimer, CanonicalResponse, CanonicalResponse_Ok, function_name, caller_name
+from common.mast_logging import init_log
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from common.config import Config
 from fastapi.routing import APIRouter
@@ -18,6 +18,7 @@ from common.ascom import ascom_run, AscomDispatcher
 from common.activities import MountActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 
 class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
@@ -306,7 +307,7 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
         while not st.mount.is_tracking:
             time.sleep(1)
             st = self.pw.status()
-        logger.info("started tracking")
+        logger.info(f"started tracking (from {caller_name()})")
         return CanonicalResponse_Ok
 
     def stop_tracking(self):
@@ -323,7 +324,7 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
         while st.mount.is_tracking:
             time.sleep(1)
             st = self.pw.status()
-        logger.info("stopped tracking")
+        logger.info(f"stopped tracking (from {caller_name()})")
         return CanonicalResponse_Ok
 
     def goto_ra_dec_j2000(self, ra: float, dec: float):

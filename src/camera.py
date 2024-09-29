@@ -16,6 +16,7 @@ from common.utils import Component, CanonicalResponse, CanonicalResponse_Ok, fun
 from common.paths import PathMaker
 from common.config import Config
 from common.camera import CameraRoi, CameraBinning
+from common.mast_logging import init_log
 from dlipower.dlipower.dlipower import SwitchedPowerDevice
 
 from fastapi.routing import APIRouter
@@ -25,6 +26,7 @@ from common.ascom import ascom_run, AscomDispatcher
 from common.activities import CameraActivities
 
 logger = logging.getLogger('mast.unit.' + __name__)
+init_log(logger)
 
 
 class Visualizer:
