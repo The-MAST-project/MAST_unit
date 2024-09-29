@@ -42,8 +42,14 @@ class Acquirer:
         acquisition_conf = self.unit.unit_conf['acquisition']
 
         self.unit.start_activity(UnitActivities.Positioning)
-        self.unit.stage.move_to_preset(StagePresetPosition.Sky)
+        #
+        # Move the stage and mount into position
+        #
+        preset: StagePresetPosition = StagePresetPosition.Sky if phase == 'sky' else StagePresetPosition.Spec
+        self.unit.stage.move_to_preset(preset)
+
         self.unit.mount.goto_ra_dec_j2000(target_ra_j2000_hours, target_dec_j2000_degs)
+
         while self.unit.stage.is_moving or self.unit.mount.is_slewing:
             time.sleep(1)
         logger.info(f"{op}: sleeping 10 seconds to let the mount stop ...")
@@ -73,7 +79,7 @@ class Acquirer:
         self.folder = os.path.join(self.folder, phase)
         os.makedirs(self.folder, exist_ok=True)
 
-        settings = CameraSettings(
+        acquisition_settings = CameraSettings(
             seconds=acquisition_conf['exposure'],
             base_folder=self.folder,
             gain=acquisition_conf['gain'],
@@ -95,7 +101,7 @@ class Acquirer:
         target = Coord(ra=Angle(target_ra_j2000_hours * u.hour), dec=Angle(target_dec_j2000_degs * u.deg))
 
         if not self.unit.solver.solve_and_correct(target=target,
-                                                  camera_settings=settings,
+                                                  camera_settings=acquisition_settings,
                                                   solving_tolerance=SolvingTolerance(ra_tolerance, dec_tolerance),
                                                   phase=phase,
                                                   parent_activity=UnitActivities.Acquiring,
@@ -142,14 +148,6 @@ class Acquirer:
         logger.info(f"{op}: sleeping 10 seconds to let the mount stop ...")
         time.sleep(10)
         self.unit.end_activity(UnitActivities.Positioning)
-
-        #
-        # set the camera for phase1 of acquisition mode (stage at Sky position)
-        #
-        # self.folder = PathMaker().make_acquisition_folder(
-        #     tags={
-        #         'target': f"{target_ra_j2000_hours},{target_dec_j2000_degs}"
-        #     })
 
         sky_settings = CameraSettings(
             seconds=acquisition_conf['exposure'],
@@ -202,24 +200,6 @@ class Acquirer:
         while self.unit.stage.is_moving:
             time.sleep(.2)
 
-        # guiding_conf = self.unit.unit_conf['guiding']
-        # binning: CameraBinning = CameraBinning(guiding_conf['binning'], guiding_conf['binning'])
-        #
-        # unit_roi = UnitRoi.from_dict(guiding_conf['roi'])  # we use only the center and compute the sizes
-        # half_width = min(unit_roi.fiber_x, self.unit.camera.cameraXSize - unit_roi.fiber_x) - 300
-        # unit_roi.width = half_width * 2
-        # half_height = min(unit_roi.fiber_y, self.unit.camera.cameraYSize - unit_roi.fiber_y) - 200
-        # unit_roi.height = half_height * 2
-
-        # spec_settings = CameraSettings(
-        #     seconds=guiding_conf['exposure'],
-        #     binning=binning,
-        #     roi=unit_roi.to_camera_roi(binning=binning),
-        #     gain=guiding_conf['gain'] if 'gain' in guiding_conf else None,
-        #     base_folder=os.path.join(self.latest_acquisition.folder, 'spec'),
-        #     save=True
-        # )
-
         spec_settings = self.unit.guider.make_guiding_settings(
             base_folder=os.path.join(self.latest_acquisition.folder, phase))
         success = self.unit.solver.solve_and_correct(target=target,
@@ -244,6 +224,7 @@ class Acquirer:
         )
 
         self.unit.acquirer.latest_acquisition.post_process()
+        # TBD: stop mount tracking
 
     def start_acquisition(self, ra_j2000_hours: float, dec_j2000_degs: float):
         Thread(name='acquisition', target=self.do_acquire, args=[ra_j2000_hours, dec_j2000_degs]).start()
@@ -256,10 +237,3 @@ class Acquirer:
             name='solve-and-correct',
             target=self.do_solve_and_correct,
             args=[ra_j2000_hours, dec_j2000_degs, 'testing']).start()
-
-    # def save_and_plot_corrections(self, folder: str):
-    #     path = os.path.join(folder, 'corrections.json')
-    #     with open(path, 'w') as fp:
-    #         json.dump(self.unit.corrections, fp, indent=2)
-    #     plot_corrections_sequence(path)
-    #     Filer().move_ram_to_shared(path)
