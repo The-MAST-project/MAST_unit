@@ -174,8 +174,8 @@ def plot_corrections(acquisition_folder: str | None = None):
         start: datetime.datetime = sequence[0].time
         end: datetime.datetime = sequence[-1].time
         t = [(corr.time - start).seconds for corr in sequence]
-        ra_deltas = [corr.ra_delta for corr in sequence]
-        dec_deltas = [corr.dec_delta for corr in sequence]
+        ra_deltas = [abs(corr.ra_delta) for corr in sequence]
+        dec_deltas = [abs(corr.dec_delta) for corr in sequence]
 
         plt.plot(t, ra_deltas, color='blue', label='Ra')
         plt.axhline(y=corrections.tolerance_ra, color='blue', linestyle=':')
@@ -185,16 +185,17 @@ def plot_corrections(acquisition_folder: str | None = None):
         start_label = Patch(color='none', label=f"Start: {start}")
         end_label = Patch(color='none', label=f"End:   {end}")
         plt.xlabel('Delta time (sec)')
-        plt.ylabel('Corrections (asec)')
+        plt.ylabel('Corrections (arcsec)')
+        plt.yscale('log')
         plt.title(f"{phase.capitalize()}", loc='left')
         plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [start_label, end_label],
-                   loc='lower right', framealpha=1)
+                   loc='upper right', framealpha=1)
         plt.grid()
 
         file = file.replace('.json', '.png')
         plt.savefig(file, format='png')
+        plt.clf()
         logger.info(f"plot saved to '{file}'")
-        # plt.show()
 
 
 #
