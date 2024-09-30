@@ -13,12 +13,16 @@ from typing import List, NamedTuple
 from astropy.coordinates import Angle
 import astropy.units as u
 import datetime
+import math
 
 logger = logging.Logger('mast.unit.' + __name__)
 init_log(logger)
 
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
+
+ra_color = 'blue'
+dec_color = 'green'
 
 
 # Function to determine if the environment is interactive
@@ -70,17 +74,16 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
 
     # Plot the V-curve
     plt.figure(figsize=(8, 6))
-    # plt.plot(x, star_diameter, label=r'$\sqrt{A \cdot X^2 + B \cdot X + C}$', color='blue')
-    plt.plot(x, star_diameter, label='Star diameters (RMS, pixels)', color='blue')
+    plt.plot(x, star_diameter, label='Star diameters (RMS, pixels)', color=ra_color)
 
     # Add a red tick at the minimum X position on the X-axis
-    plt.axvline(x_min, ymin=0, ymax=diameter_min, color='red', linestyle=':', label=f'Best focus: {int(x_min)} microns')
+    plt.axvline(x_min, ymin=0, ymax=diameter_min, color='black', linestyle=':', label=f'Best focus: {int(x_min)} microns')
     plt.scatter(x_min, diameter_min, color='red', zorder=5)
 
     # Add a black tick on the Y-axis at the minimum diameter
     min_diam_asec = diameter_min * pixel_scale
     plt.axhline(diameter_min, color='black', linestyle=':',
-                label=f'Min. diam.: {diameter_min:.2f} px, {min_diam_asec:.2f} asec')
+                label=f'Min. diam.: {diameter_min:.2f} px, {min_diam_asec:.2f} arcsec')
 
     # Add green lines for tolerance
     x_left = x_min - result.tolerance
@@ -89,12 +92,12 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     y_min = np.min(star_diameter)
     y_left = np.sqrt(result.vcurve_a * x_left**2 + result.vcurve_b * x_left + result.vcurve_c) / y_max
     y_right = np.sqrt(result.vcurve_a * x_right**2 + result.vcurve_b * x_right + result.vcurve_c) / y_max
-    plt.axvline(x_left, ymin=0, ymax=y_left, color='green', linestyle=':', label='2.5% diam. increase')
-    plt.axvline(x_right, ymin=0, ymax=y_right, color='green', linestyle=':')
+    plt.axvline(x_left, ymin=0, ymax=y_left, color=dec_color, linestyle=':', label='2.5% diam. increase')
+    plt.axvline(x_right, ymin=0, ymax=y_right, color=dec_color, linestyle=':')
 
     # Add circles and labels at the specified points
     for point in points:
-        plt.scatter(point.x, point.y, color='green', edgecolor='black', s=100, zorder=5, marker='o')
+        plt.scatter(point.x, point.y, color=dec_color, s=25, zorder=5, marker='o')
         # Add label in small red font at NE corner
         plt.text(point.x + 5, point.y + 0.1, str(point.label), color='red', fontsize=10)
 
@@ -103,7 +106,7 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     plt.xlabel('Focuser Position')
     plt.ylabel('Star Diameter (px)')
 
-    tolerance_label = Patch(color='none', label=f"Tolerance: {result.tolerance} microns")
+    tolerance_label = Patch(color='none', label=f"Tolerance: {result.tolerance:.1f} microns")
     # Show grid and legend
     plt.grid(True)
     plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [tolerance_label], loc='upper right', framealpha=1)
@@ -125,6 +128,8 @@ def plot_corrections(acquisition_folder: str | None = None):
     :return:
     """
     op = function_name()
+    ra_guiding_rms: float = 0
+    dec_guiding_rms: float = 0
 
     def has_corrections(_folder: str) -> bool:
         for _phase in correction_phases:
@@ -132,27 +137,96 @@ def plot_corrections(acquisition_folder: str | None = None):
                 return True
         return False
 
-    target_folder = None
+    acquisition_top = None
     if acquisition_folder is not None:
-        target_folder = acquisition_folder
+        acquisition_top = acquisition_folder
 
-    if target_folder is None:
-        while target_folder is None:
+    if acquisition_top is None:
+        while acquisition_top is None:
             latest_acquisition_folders = Filer().find_latest(Filer().shared.root, pattern='*,target=*')
             if not latest_acquisition_folders:
                 logger.error(f"{op}: Could not find acquisition folders under '{Filer().shared.root}'")
                 return
             for folder in latest_acquisition_folders:
                 if has_corrections(folder):
-                    target_folder = folder
+                    acquisition_top = folder
                     break
 
-    if target_folder is None:
+    if acquisition_top is None:
         logger.error(f"{op}: Could not find an acquisition folder with corrections under '{Filer().shared.root}'")
         return
 
+    combined_corrections: Corrections | None = None
+    end_of_phase: List[datetime.datetime] = []
+
+    def _plot_corrections(_phase: str, _corrections: Corrections, _file: str,
+                          _end_of_phase: List[datetime.datetime] | None = None):
+        nonlocal ra_guiding_rms, dec_guiding_rms
+
+        _sequence = _corrections.sequence
+
+        start: datetime.datetime = _sequence[0].time
+        end: datetime.datetime = _sequence[-1].time
+        t = [(corr.time - start).seconds for corr in _sequence]
+        ra_deltas = [abs(corr.ra_delta) for corr in _sequence]
+        dec_deltas = [abs(corr.dec_delta) for corr in _sequence]
+
+        ra_rms_label = ''
+        dec_rms_label = ''
+
+        if _phase == 'guiding':
+            square_sum = sum(x**2 for x in ra_deltas)
+            ra_guiding_rms = math.sqrt(square_sum / len(ra_deltas))
+            square_sum = sum(x**2 for x in dec_deltas)
+            dec_guiding_rms = math.sqrt(square_sum / len(dec_deltas))
+
+        plt.plot(t, ra_deltas, color=ra_color, label=f'Ra', marker='*')
+        plt.plot(t, dec_deltas, color=dec_color, label=f'Dec', marker='*')
+
+        if corrections.tolerance_dec == corrections.tolerance_ra:
+            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':', label='Tolerance')
+        else:
+            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':', label='RA tolerance')
+            plt.axhline(y=_corrections.tolerance_dec, color=dec_color, linestyle=':', label='Dec tolerance')
+
+        with_label = True
+        if _end_of_phase:
+            for t in _end_of_phase:
+                plt.axvline(x=(t - start).seconds, linestyle='--', color='black',
+                            label=('End of phase' if with_label else None))
+                if with_label:
+                    with_label = False
+
+        if _phase in ['guiding', 'acquisition']:
+            ra_rms_label = Patch(color='none', label=f"RA  guiding RMS: {ra_guiding_rms:.2f}")
+            dec_rms_label = Patch(color='none', label=f"Dec guiding RMS: {dec_guiding_rms:.2f}")
+
+        if start.day == end.day:
+            start_time = f"{start.time().strftime('%H:%M:%S.%f')[:11]}"
+            end_time = f"{end.time().strftime('%H:%M:%S.%f')[:11]}"
+        else:
+            start_time = Patch(color='none', label=f"{start}")
+            end_time = Patch(color='none', label=f"{end}")
+
+        plt.xlabel(f'Delta time (sec) {start_time} -> {end_time}')
+        plt.ylabel('Corrections (arcsec)')
+        plt.yscale('log')
+        plt.title(f"{_phase.capitalize()}", loc='left')
+
+        labels = []
+        if _phase in ['guiding', 'acquisition']:
+            labels = labels + [ra_rms_label, dec_rms_label]
+        plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + labels, loc='upper right', framealpha=.7)
+
+        plt.grid()
+
+        _file = _file.replace('.json', '.png')
+        plt.savefig(_file, format='png')
+        plt.clf()
+        logger.info(f"plot saved to '{_file}'")
+
     for phase in ['sky', 'spec', 'guiding']:
-        file = os.path.join(target_folder, phase, 'corrections.json')
+        file = os.path.join(acquisition_top, phase, 'corrections.json')
         if not os.path.isfile(file):
             continue
 
@@ -166,36 +240,29 @@ def plot_corrections(acquisition_folder: str | None = None):
 
         if not corrections:
             continue
-
         sequence = corrections.sequence
         if corrections.last_delta:
             sequence.append(corrections.last_delta)
 
-        start: datetime.datetime = sequence[0].time
-        end: datetime.datetime = sequence[-1].time
-        t = [(corr.time - start).seconds for corr in sequence]
-        ra_deltas = [abs(corr.ra_delta) for corr in sequence]
-        dec_deltas = [abs(corr.dec_delta) for corr in sequence]
+        if combined_corrections is None:
+            combined_corrections = Corrections(
+                phase='acquisition',
+                target_ra=corrections.target_ra,
+                target_dec=corrections.target_dec,
+                tolerance_ra=corrections.tolerance_ra,
+                tolerance_dec=corrections.tolerance_dec,
+            )
+        combined_corrections.sequence += corrections.sequence
+        end_of_phase.append(sequence[0].time)
 
-        plt.plot(t, ra_deltas, color='blue', label='Ra')
-        plt.axhline(y=corrections.tolerance_ra, color='blue', linestyle=':')
-        plt.plot(t, dec_deltas, color='green', label='Dec')
-        plt.axhline(y=corrections.tolerance_dec, color='blue', linestyle=':')
+        _plot_corrections(phase, corrections, file)
 
-        start_label = Patch(color='none', label=f"Start: {start}")
-        end_label = Patch(color='none', label=f"End:   {end}")
-        plt.xlabel('Delta time (sec)')
-        plt.ylabel('Corrections (arcsec)')
-        plt.yscale('log')
-        plt.title(f"{phase.capitalize()}", loc='left')
-        plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + [start_label, end_label],
-                   loc='upper right', framealpha=1)
-        plt.grid()
-
-        file = file.replace('.json', '.png')
-        plt.savefig(file, format='png')
-        plt.clf()
-        logger.info(f"plot saved to '{file}'")
+    _plot_corrections(
+        _phase='acquisition',
+        _corrections=combined_corrections,
+        _file=os.path.join(acquisition_top, 'corrections.json'),
+        _end_of_phase=end_of_phase,
+    )
 
 
 #
