@@ -11,6 +11,7 @@ from dlipower.dlipower.dlipower import SwitchedPowerDevice
 from fastapi.routing import APIRouter
 from common.ascom import ascom_run, AscomDispatcher
 from common.activities import FocuserActivities
+from common.stopping import StoppingMonitor
 
 logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
@@ -21,7 +22,7 @@ class FocusDirection(IntEnum):
     Out = auto()
 
 
-class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
+class Focuser(Component, SwitchedPowerDevice, AscomDispatcher, StoppingMonitor):
 
     _instance = None
     _initialized = False
@@ -49,6 +50,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
 
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Focuser')
         Component.__init__(self)
+        StoppingMonitor.__init__(self, 'focuser', max_len=5, sampler=self.position_sampler, interval=1, epsilon=0)
 
         if not self.is_on():
             self.power_on()
@@ -78,6 +80,9 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher):
 
         self._initialized = True
         logger.info('initialized')
+
+    def position_sampler(self):
+        return self.position
 
     def startup(self):
         """

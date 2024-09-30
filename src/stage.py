@@ -15,6 +15,7 @@ import sys
 import platform
 from fastapi.routing import APIRouter
 from common.activities import StageActivities
+from common.stopping import StoppingMonitor
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
 ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
@@ -65,7 +66,7 @@ stage_direction_str2int_dict: dict = {
 }
 
 
-class Stage(Component, SwitchedPowerDevice):
+class Stage(Component, SwitchedPowerDevice, StoppingMonitor):
     _instance = None
     _initialized = False
 
@@ -85,6 +86,7 @@ class Stage(Component, SwitchedPowerDevice):
 
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Stage')
         Component.__init__(self)
+        StoppingMonitor.__init__(self, 'stage', max_len=3, sampler=self.position_sampler, interval=.5, epsilon=0)
 
         self.errors: List[str] = []
         self.device = None
@@ -187,6 +189,9 @@ class Stage(Component, SwitchedPowerDevice):
     def __repr__(self):
         return f"<Stage device={self.device}>"
 
+    def position_sampler(self):
+        return self.position
+
     @property
     def connected(self) -> bool:
         return self.detected
@@ -286,7 +291,7 @@ class Stage(Component, SwitchedPowerDevice):
         if result == Result.Ok:
             self.start_activity(StageActivities.Moving)
         else:
-            raise Exception(f'Could not start move to {value}')
+            raise Exception(f'Could not start move to {value} ({result=})')
 
     def status(self) -> dict:
         """

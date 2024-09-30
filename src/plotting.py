@@ -252,7 +252,7 @@ def plot_corrections(acquisition_folder: str | None = None):
                 tolerance_ra=corrections.tolerance_ra,
                 tolerance_dec=corrections.tolerance_dec,
             )
-        combined_corrections.sequence += corrections.sequence
+        combined_corrections.sequence += sequence
         end_of_phase.append(sequence[0].time)
 
         _plot_corrections(phase, corrections, file)

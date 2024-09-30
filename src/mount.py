@@ -16,12 +16,13 @@ import math
 from astropy.coordinates import SkyCoord, frame_transform_graph, Angle
 from common.ascom import ascom_run, AscomDispatcher
 from common.activities import MountActivities
+from common.stopping import StoppingMonitor
 
 logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
 
 
-class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
+class Mount(Component, SwitchedPowerDevice, AscomDispatcher, StoppingMonitor):
     _instance = None
     _initialized = False
 
@@ -47,6 +48,7 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
         self.conf = self.unit_conf['mount']
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Mount')
         Component.__init__(self)
+        StoppingMonitor.__init__(self, 'mount', max_len=5, sampler=self.position_monitor, interval=1, epsilon=0.3)
 
         if not self.is_on():
             self.power_on()
@@ -223,6 +225,13 @@ class Mount(Component, SwitchedPowerDevice, AscomDispatcher):
             return CanonicalResponse(errors=[error])
 
         return CanonicalResponse_Ok
+
+    def position_monitor(self):
+        """
+        Returns sum of distances to target (arcsec) on both axes, for stopping monitoring
+        """
+        status = self.pw.status()
+        return status.mount.axis0.dist_to_target_arcsec + status.mount.axis1.dist_to_target_arcsec
 
     def ontimer(self):
         if not self.connected:
