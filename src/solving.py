@@ -265,7 +265,7 @@ class Solver:
                 self.unit.end_activity(UnitActivities.Solving)
                 return False
 
-            logger.info(f"plate solver found a match, yey!!!")
+            logger.info(f">>>>> plate solver found a match, YEY, YEPEEE, HURRAY!!! <<<")
             solved_ra_arcsec: float = Angle(result.solution.center_ra_j2000_rads * u.radian).arcsecond
             solved_dec_arcsec: float = Angle(result.solution.center_dec_j2000_rads * u.radian).arcsecond
 
@@ -294,6 +294,15 @@ class Solver:
                     # The 'guiding' phase keeps going until the parent_activity is ended
                     #
                     self.unit.end_activity(UnitActivities.Solving)
+                    if phase not in self.unit.acquirer.latest_acquisition.corrections:
+                        # in case there were no corrections for this phase
+                        self.unit.acquirer.latest_acquisition.corrections[phase] = Corrections(
+                            phase=phase,
+                            target_ra=target.ra.hour,
+                            target_dec=target.dec.deg,
+                            tolerance_ra=solving_tolerance.ra.arcsecond,
+                            tolerance_dec=solving_tolerance.dec.arcsecond,
+                        )
                     corrections = self.unit.acquirer.latest_acquisition.corrections[phase]
                     corrections.last_delta = Correction(
                         time=datetime.datetime.now(), 
