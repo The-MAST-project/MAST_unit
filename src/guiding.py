@@ -85,15 +85,15 @@ class Guider:
                 dec=Angle(pw4_status.mount.dec_j2000_degs * u.deg)
             )
             logger.info(f"{op}: guiding at current coordinates {target}")
-        else:
-            logger.info(f"{op}: sending telescope to {target} before guiding ...")
-            self.unit.mount.goto_ra_dec_j2000(target.ra.hour, target.dec.deg)
-            logger.info(f"{op}: waiting for mount to stop moving ...")
-            while self.unit.mount.is_slewing:
-                time.sleep(1)
-            logger.info(f"{op}: waiting 5 for mount to stop moving ...")
-            time.sleep(5)
-            logger.info(f"{op}: mount stopped moving")
+        # else:
+        #     logger.info(f"{op}: sending telescope to {target} before guiding ...")
+        #     self.unit.mount.goto_ra_dec_j2000(target.ra.hour, target.dec.deg)
+        #     logger.info(f"{op}: waiting for mount to stop moving ...")
+        #     while self.unit.mount.is_slewing:
+        #         time.sleep(1)
+        #     logger.info(f"{op}: waiting 5 for mount to stop moving ...")
+        #     time.sleep(5)
+        #     logger.info(f"{op}: mount stopped moving")
 
         #
         # Images folder, either given (part of an acquisition sequence) or under 'Guidings'
