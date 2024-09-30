@@ -199,6 +199,9 @@ class Acquirer:
         self.unit.stage.move_to_preset(StagePresetPosition.Spec)
         while self.unit.stage.is_moving:
             time.sleep(.2)
+        logger.info(f"sleeping additional 5 seconds")
+        time.sleep(5)
+        logger.info(f"stage now at {self.unit.stage.position}")
 
         spec_settings = self.unit.guider.make_guiding_settings(
             base_folder=os.path.join(self.latest_acquisition.folder, phase))
@@ -230,6 +233,9 @@ class Acquirer:
         Thread(name='acquisition', target=self.do_acquire, args=[ra_j2000_hours, dec_j2000_degs]).start()
 
     def start_one_solve_and_correct(self, ra_j2000_hours: float, dec_j2000_degs: float):
+        """
+        This is for debugging via FastAPI, not for production
+        """
         self.latest_acquisition = Acquisition(target_ra=ra_j2000_hours,
                                               target_dec=dec_j2000_degs,
                                               conf=self.unit.unit_conf['acquisition'])
