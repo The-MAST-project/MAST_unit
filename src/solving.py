@@ -252,7 +252,12 @@ class Solver:
             logger.info(f"{op}: calling plate_solve ({try_number=} of {max_tries=})")
 
             result = self.plate_solve(target=target, settings=camera_settings)
+            result_file_name = camera_settings.image_path.replace('.fits', '.result')
             self.latest_result = result
+
+            os.makedirs(os.path.dirname(result_file_name), exist_ok=True)
+            with open(result_file_name) as fp:
+                json.dump(result, fp, indent=2)
 
             if result.state != 'found_match':
                 msg = None
