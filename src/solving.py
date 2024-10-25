@@ -171,7 +171,7 @@ class Solver:
 
             ps3_client.connect('127.0.0.1', 8998)
             start = datetime.datetime.now()
-            timeout_seconds: float = 30
+            timeout_seconds: float = 50
             end = start + datetime.timedelta(seconds=timeout_seconds)
             logger.info(f"{op}: calling ps3_client.begin_platesolve_shm ...")
             ps3_client.begin_platesolve_shm(
@@ -189,7 +189,6 @@ class Solver:
             solver_status: PS3SolvingResult
             while True:
                 solver_status = PS3SolvingResult(ps3_client.platesolve_status())
-                # logger.info(f"{op}: {solver_status.state=}")
 
                 if (solver_status.state == 'error' or
                         solver_status.state == 'no_match' or
@@ -265,7 +264,7 @@ class Solver:
                 self.unit.end_activity(UnitActivities.Solving)
                 return False
 
-            logger.info(f">>>>> plate solver found a match, YEY, YEPEEE, HURRAY!!! <<<")
+            logger.info(f">>>>> plate solver found a match, YEY, YEPEEE, HURRAY !!! <<<")
             solved_ra_arcsec: float = Angle(result.solution.center_ra_j2000_rads * u.radian).arcsecond
             solved_dec_arcsec: float = Angle(result.solution.center_dec_j2000_rads * u.radian).arcsecond
 
