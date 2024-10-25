@@ -166,7 +166,7 @@ class Autofocuser:
 
         if not start_position:
             start_position = self.unit.unit_conf['focuser']['known_as_good_position']
-        focuser_position: int = start_position - ((number_of_images / 2) * ticks_per_step)
+        focuser_position: int = int(start_position - ((number_of_images / 2) * ticks_per_step))
         self.unit.focuser.position = focuser_position
 
         logger.debug(f"{op}: Waiting for components (stage, mount, focuser) to stop moving ...")
@@ -187,15 +187,15 @@ class Autofocuser:
             acquisition_conf['roi']['height'],
         )
         _binning = CameraBinning(1, 1)
-        autofocus_folder = PathMaker().make_autofocus_folder()
 
         max_tries: int = self.unit.unit_conf['autofocus']['max_tries']
         max_tolerance: float = self.unit.unit_conf['autofocus']['max_tolerance']
-        try_number: int
+        try_number: int = 0
 
         for try_number in range(max_tries):
 
             logger.info(f"{op}: starting autofocus try #{try_number} (of {max_tries})")
+            autofocus_folder = PathMaker().make_autofocus_folder()
             #
             # Acquire images
             #
@@ -255,7 +255,7 @@ class Autofocuser:
                     break
             if datetime.datetime.now() >= end:
                 logger.error(f"{op}: autofocus analyser did not start within {timeout} seconds")
-                Filer().move_ram_to_shared(files)
+                Filer().move_ram_to_shared(autofocus_folder)
                 self.unit.end_activity(UnitActivities.AutofocusAnalysis)
                 self.unit.end_activity(UnitActivities.AutofocusingWIS)
                 return
@@ -273,7 +273,7 @@ class Autofocuser:
             if datetime.datetime.now() >= end:
                 logger.error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
                 ps3_client.close()
-                Filer().move_ram_to_shared(files)
+                Filer().move_ram_to_shared(autofocus_folder)
                 self.unit.end_activity(UnitActivities.AutofocusAnalysis)
                 continue  # next try_number
 
@@ -282,11 +282,12 @@ class Autofocuser:
 
             if not status.analysis_result:
                 logger.error(f"{op}: focus analyser stopped working but empty analysis_result")
+                Filer().move_ram_to_shared(autofocus_folder)
                 continue  # next try_number
 
             if not status.analysis_result.has_solution:
                 logger.error(f"{op}: focus analyser did not find a solution")
-                self.unit.end_activity(UnitActivities.AutofocusingWIS)
+                Filer().move_ram_to_shared(autofocus_folder)
                 continue  # next try_number
 
             #
@@ -319,7 +320,7 @@ class Autofocuser:
                 logger.error(f"could not save unit '{self.unit.hostname}' " +
                              f"configuration for focuser known-as-good-position (exception: {e})")
 
-            Filer().move_ram_to_shared(files)
+            Filer().move_ram_to_shared(autofocus_folder)
             pixel_scale: float = self.unit.unit_conf['camera']['pixel_scale_at_bin1']
             Thread(name='autofocus-analysis-plotter', target=plot_autofocus_analysis,
                    args=[result, autofocus_folder, pixel_scale]).start()
@@ -327,7 +328,7 @@ class Autofocuser:
             break  # the tries loop
 
         if try_number == max_tries - 1:
-            logger.error(f"{op}: could not acieve {max_tolerance=} within {max_tries=}")
+            logger.error(f"{op}: could not achieve {max_tolerance=} within {max_tries=}")
 
         self.unit.end_activity(UnitActivities.AutofocusingWIS)
 
