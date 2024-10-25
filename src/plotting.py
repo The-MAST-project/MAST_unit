@@ -8,12 +8,13 @@ import sys
 import os
 from common.mast_logging import init_log
 from common.utils import function_name, Filer
-from common.corrections import correction_phases, Correction, Corrections
+from common.corrections import correction_phases, Corrections
 from typing import List, NamedTuple
 from astropy.coordinates import Angle
 import astropy.units as u
 import datetime
 import math
+import re
 
 logger = logging.Logger('mast.unit.' + __name__)
 init_log(logger)
@@ -77,19 +78,20 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     plt.plot(x, star_diameter, label='Star diameters (RMS, pixels)', color=ra_color)
 
     # Add a red tick at the minimum X position on the X-axis
-    plt.axvline(x_min, ymin=0, ymax=diameter_min, color='black', linestyle=':', label=f'Best focus: {int(x_min)} microns')
+    plt.axvline(x_min, ymin=0, ymax=diameter_min, color='black', linestyle=':',
+                label=f'Best focus: {int(x_min)} microns')
     plt.scatter(x_min, diameter_min, color='red', zorder=5)
 
     # Add a black tick on the Y-axis at the minimum diameter
-    min_diam_asec = diameter_min * pixel_scale
+    min_diam_arcsec = diameter_min * pixel_scale
     plt.axhline(diameter_min, color='black', linestyle=':',
-                label=f'Min. diam.: {diameter_min:.2f} px, {min_diam_asec:.2f} arcsec')
+                label=f'Min. diam.: {diameter_min:.2f} px, {min_diam_arcsec:.2f} arcsec')
 
     # Add green lines for tolerance
     x_left = x_min - result.tolerance
     x_right = x_min + result.tolerance
     y_max = np.max(star_diameter)
-    y_min = np.min(star_diameter)
+    # y_min = np.min(star_diameter)
     y_left = np.sqrt(result.vcurve_a * x_left**2 + result.vcurve_b * x_left + result.vcurve_c) / y_max
     y_right = np.sqrt(result.vcurve_a * x_right**2 + result.vcurve_b * x_right + result.vcurve_c) / y_max
     plt.axvline(x_left, ymin=0, ymax=y_left, color=dec_color, linestyle=':', label='2.5% diam. increase')
@@ -159,11 +161,24 @@ def plot_corrections(acquisition_folder: str | None = None):
     combined_corrections: Corrections | None = None
     end_of_phase: List[datetime.datetime] = []
 
-    def _plot_corrections(_phase: str, _corrections: Corrections, _file: str,
+    def _plot_corrections(_phase: str,  # one of ['sky', 'spec', 'guiding']
+                          _corrections: Corrections,
+                          _file: str,   # .../<date>/Acquisitions/seq=<seq-number>,time=<start-time>,target=<target>
                           _end_of_phase: List[datetime.datetime] | None = None):
         nonlocal ra_guiding_rms, dec_guiding_rms
 
         _sequence = _corrections.sequence
+
+        file_name_pattern = (r"?P<date>\d{4}-\d{2}-\d{2})/Acquisitions/seq=(?P<seq_number>\d+)," +
+                             r"time=(?P<start_time>[\d:]+),target=(?P<target>\w+)")
+        match = re.search(file_name_pattern, _file)
+        if match:
+            acq_date = match.group("date")
+            acq_seq_number = match.group("seq_number")
+            acq_start_time = match.group("start_time")
+            acq_target = match.group("target")
+        else:
+            raise ValueError(f"could not extract seq_number, start_time and target from path '{_file}'")
 
         start: datetime.datetime = _sequence[0].time
         end: datetime.datetime = _sequence[-1].time
@@ -184,10 +199,13 @@ def plot_corrections(acquisition_folder: str | None = None):
         plt.plot(t, dec_deltas, color=dec_color, label=f'Dec', marker='*')
 
         if corrections.tolerance_dec == corrections.tolerance_ra:
-            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':', label='Tolerance')
+            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':',
+                        label=f'Tolerance: {corrections.tolerance_ra:.2f}')
         else:
-            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':', label='RA tolerance')
-            plt.axhline(y=_corrections.tolerance_dec, color=dec_color, linestyle=':', label='Dec tolerance')
+            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':',
+                        label=f'RA tolerance: {corrections.tolerance_ra:.2f}')
+            plt.axhline(y=_corrections.tolerance_dec, color=dec_color, linestyle=':',
+                        label=f'Dec tolerance: {corrections.tolerance_dec:.2f}')
 
         with_label = True
         if _end_of_phase:
@@ -198,8 +216,8 @@ def plot_corrections(acquisition_folder: str | None = None):
                     with_label = False
 
         if _phase in ['guiding', 'acquisition']:
-            ra_rms_label = Patch(color='none', label=f"RA  guiding RMS: {ra_guiding_rms:.2f}")
-            dec_rms_label = Patch(color='none', label=f"Dec guiding RMS: {dec_guiding_rms:.2f}")
+            ra_rms_label = Patch(color='none', label=f"RA  RMS: {ra_guiding_rms:.2f}")
+            dec_rms_label = Patch(color='none', label=f"Dec RMS: {dec_guiding_rms:.2f}")
 
         if start.day == end.day:
             start_time = f"{start.time().strftime('%H:%M:%S.%f')[:11]}"
@@ -208,10 +226,18 @@ def plot_corrections(acquisition_folder: str | None = None):
             start_time = Patch(color='none', label=f"{start}")
             end_time = Patch(color='none', label=f"{end}")
 
-        plt.xlabel(f'Delta time (sec) {start_time} -> {end_time}')
-        plt.ylabel('Corrections (arcsec)')
+        plt.xlabel(f'Delta time (sec), Time span: {start_time}, {end_time}')
+        plt.ylabel('Corrections in arcsec (log. scale) ')
         plt.yscale('log')
-        plt.title(f"{_phase.capitalize()}", loc='left')
+
+        title = f"Acquisition:\n"
+        title += f"   date: {acq_date}\n"
+        title += f" number: {acq_seq_number}\n"
+        title += f"   time: {acq_start_time}\n"
+        title += f" target: {acq_target}"
+        if _phase != 'acquisition':
+            title += f"  phase: {_phase}"
+        plt.title(f"{title}", loc='left')
 
         labels = []
         if _phase in ['guiding', 'acquisition']:
