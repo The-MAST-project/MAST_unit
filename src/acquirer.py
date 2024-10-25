@@ -145,7 +145,7 @@ class Acquirer:
         self.unit.mount.goto_ra_dec_j2000(target_ra_j2000_hours, target_dec_j2000_degs)
         while self.unit.stage.is_moving or self.unit.mount.is_slewing:
             time.sleep(1)
-        logger.info(f"{op}: sleeping 10 seconds to let the mount stop ...")
+        logger.info(f"{op}: sleeping 10 seconds to let the mount and stage stop moving ...")
         time.sleep(10)
         self.unit.end_activity(UnitActivities.Positioning)
 
@@ -199,7 +199,7 @@ class Acquirer:
         self.unit.stage.move_to_preset(StagePresetPosition.Spec)
         while self.unit.stage.is_moving:
             time.sleep(.2)
-        logger.info(f"sleeping additional 5 seconds")
+        logger.info(f"sleeping additional 5 seconds to let the stage stop moving ...")
         time.sleep(5)
         logger.info(f"stage now at {self.unit.stage.position}")
 
