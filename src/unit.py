@@ -259,7 +259,7 @@ class Unit(Component):
         ret = self.component_status()
         ret |= {
             'id': id(self),
-            'guiding': self.guider.guiding,
+            'guiding': self.guider.is_guiding,
             'autofocusing': self.autofocuser.is_autofocusing,
         }
         for comp in self.components:
@@ -328,12 +328,6 @@ class Unit(Component):
                 time.sleep(.2)
 
         [component.abort() for component in self.components]
-        # if self.is_active(UnitActivities.StartingUp):
-        #     self.mount.abort()
-        #     self.camera.abort()
-        #     self.focuser.abort()
-        #     self.stage.abort()
-        #     self.covers.abort()
 
     def ontimer(self):
         """
@@ -659,17 +653,17 @@ router.add_api_route(base_path + '/startup', tags=[tag], endpoint=unit.startup)
 router.add_api_route(base_path + '/shutdown', tags=[tag], endpoint=unit.shutdown)
 router.add_api_route(base_path + '/abort', tags=[tag], endpoint=unit.abort)
 router.add_api_route(base_path + '/status', tags=[tag], endpoint=unit.status)
-router.add_api_route(base_path + '/connect', tags=[tag], endpoint=unit.connect)
-router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=unit.disconnect)
-router.add_api_route(base_path + '/start_pwi4_autofocus', tags=[tag], endpoint=unit.autofocuser.start_pwi4_autofocus)
-router.add_api_route(base_path + '/start_wis_autofocus', tags=[tag], endpoint=unit.autofocuser.start_wis_autofocus)
+# router.add_api_route(base_path + '/connect', tags=[tag], endpoint=unit.connect)
+# router.add_api_route(base_path + '/disconnect', tags=[tag], endpoint=unit.disconnect)
+# router.add_api_route(base_path + '/start_pwi4_autofocus', tags=[tag], endpoint=unit.autofocuser.start_pwi4_autofocus)
+router.add_api_route(base_path + '/start_autofocus', tags=[tag], endpoint=unit.autofocuser.start_wis_autofocus)
 router.add_api_route(base_path + '/stop_autofocus', tags=[tag], endpoint=unit.autofocuser.stop_autofocus)
-router.add_api_route(base_path + '/start_guiding_by_solving', tags=[tag], endpoint=unit.guider.start_guiding_by_solving)
-router.add_api_route(base_path + '/start_guiding_by_phase_correlation', tags=[tag],
-                     endpoint=unit.guider.endpoint_start_guiding_by_cross_correlation)
-router.add_api_route(base_path + '/stop_guiding', tags=[tag], endpoint=unit.guider.stop_guiding)
-router.add_api_route(base_path + '/start_acquisition', tags=[tag], endpoint=unit.acquirer.start_acquisition)
-router.add_api_route(base_path + '/start_one_solve_and_correct', tags=[tag],
-                     endpoint=unit.acquirer.start_one_solve_and_correct)
-router.add_api_route(base_path + '/expose_with_roi', tags=[tag], endpoint=unit.expose_with_roi)
+# router.add_api_route(base_path + '/start_guiding', tags=[tag], endpoint=unit.guider.start_guiding_by_solving)
+# router.add_api_route(base_path + '/start_guiding_by_phase_correlation', tags=[tag],
+#                      endpoint=unit.guider.endpoint_start_guiding_by_cross_correlation)
+router.add_api_route(base_path + '/stop_acquisition_and_guiding', tags=[tag], endpoint=unit.guider.stop_guiding)
+router.add_api_route(base_path + '/start_acquisition_and_guiding', tags=[tag], endpoint=unit.acquirer.start_acquisition)
+# router.add_api_route(base_path + '/start_one_solve_and_correct', tags=[tag],
+#                      endpoint=unit.acquirer.start_one_solve_and_correct)
+router.add_api_route(base_path + '/expose', tags=[tag], endpoint=unit.expose_with_roi)
 router.add_api_route(base_path + '/test_stage_repeatability', tags=[tag], endpoint=unit.test_stage_repeatability)
