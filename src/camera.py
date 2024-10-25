@@ -123,7 +123,7 @@ class CameraSettings:
         if additional_tags:
             tags = additional_tags
         if self.tags:
-            tags += self.tags
+            tags.update(self.tags)
         for k, v in tags.items():
             self.file_name_parts.append(f"{k}" if v is None else f"{k}={v}")
 
@@ -434,7 +434,7 @@ class Camera(Component, SwitchedPowerDevice, AscomDispatcher):
             return CanonicalResponse(errors=self.errors)
 
         if self.is_active(CameraActivities.Exposing):
-            logger.info("{op}: already exposing")
+            logger.info(f"{op}: already exposing")
             return CanonicalResponse(errors=[f"already exposing"])
 
         self.errors = []
