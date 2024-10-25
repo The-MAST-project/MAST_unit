@@ -64,14 +64,15 @@ ensure_process_is_running(name='ps3cli.exe',
                           cwd='C:\\Program Files (x86)\\PlaneWave Instruments\\ps3cli\\ps3cli-2024-09-10',
                           cmd=f'ps3cli.exe --server --port=8998',
                           logger=logger,
-                          shell=True)
+                          shell=True,
+                          log_stdout_and_stderr=True)
 
 from camera import router as camera_router
 from covers import router as covers_router
 from mount import router as mount_router
 from focuser import router as focuser_router
 from stage import router as stage_router
-from unit import router as unit_router, OperatingMode
+from unit import router as unit_router
 from unit import unit
 
 while True:
@@ -124,6 +125,10 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc: Exception):
+    return ORJSONResponse(status_code=500, content={'message': f"Exception occurred: {exc}"})
 
 # @app.websocket_route(BASE_UNIT_PATH + '/unit_visual_ws')
 # async def unit_visual_websocket(websocket: WebSocket):
