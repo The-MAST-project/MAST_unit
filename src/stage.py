@@ -16,6 +16,7 @@ import platform
 from fastapi.routing import APIRouter
 from common.activities import StageActivities
 from common.stopping import StoppingMonitor
+from common.dlipowerswitch import SwitchedOutlet
 
 cur_dir = os.path.abspath(os.path.dirname(__file__))                            # Specifies the current directory.
 ximc_dir = os.path.join(cur_dir, "Standa", "ximc-2.13.6", "ximc")               # dependencies for examples.
@@ -67,6 +68,7 @@ stage_direction_str2int_dict: dict = {
 
 
 class Stage(Component, SwitchedPowerDevice, StoppingMonitor):
+# class Stage(Component, SwitchedOutlet, StoppingMonitor):
     _instance = None
     _initialized = False
 
@@ -85,8 +87,9 @@ class Stage(Component, SwitchedPowerDevice, StoppingMonitor):
         self.conf = self.unit_conf['stage']
 
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Stage')
+        # SwitchedOutlet.__init__(self, identifier='Stage')
         Component.__init__(self)
-        StoppingMonitor.__init__(self, 'stage', max_len=3, sampler=self.position_sampler, interval=.5, epsilon=0)
+        # StoppingMonitor.__init__(self, 'stage', max_len=5, sampler=self.position_sampler, interval=.5, epsilon=0)
 
         self.errors: List[str] = []
         self.device = None

@@ -50,7 +50,7 @@ class Focuser(Component, SwitchedPowerDevice, AscomDispatcher, StoppingMonitor):
 
         SwitchedPowerDevice.__init__(self, power_switch_conf=self.unit_conf['power_switch'], outlet_name='Focuser')
         Component.__init__(self)
-        StoppingMonitor.__init__(self, 'focuser', max_len=5, sampler=self.position_sampler, interval=1, epsilon=0)
+        # StoppingMonitor.__init__(self, 'focuser', max_len=5, sampler=self.position_sampler, interval=1, epsilon=0)
 
         if not self.is_on():
             self.power_on()
