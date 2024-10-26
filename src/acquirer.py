@@ -175,22 +175,21 @@ class Acquirer:
 
         target = Coord(ra=Angle(target_ra_j2000_hours * u.hour), dec=Angle(target_dec_j2000_degs * u.deg))
 
-        if not self.unit.solver.solve_and_correct(target=target,
-                                                  camera_settings=sky_settings,
-                                                  solving_tolerance=SolvingTolerance(ra_tolerance, dec_tolerance),
-                                                  parent_activity=UnitActivities.Acquiring,
-                                                  phase='sky',
-                                                  max_tries=tries):
-            logger.info(f"{op}: {phase=} failed")
-            self.latest_acquisition.save_corrections(phase)
-            self.unit.end_activity(UnitActivities.Acquiring)
-            return
-
+        achieved_tolerances = self.unit.solver.solve_and_correct(target=target,
+                                                                 camera_settings=sky_settings,
+                                                                 solving_tolerance=
+                                                                 SolvingTolerance(ra_tolerance, dec_tolerance),
+                                                                 parent_activity=UnitActivities.Acquiring,
+                                                                 phase='sky',
+                                                                 max_tries=tries)
+        logger.info(f"{op}: {phase=} {achieved_tolerances=}")
         self.latest_acquisition.save_corrections(phase)
 
-        #
-        # we managed to get within tolerances
-        #
+        if not achieved_tolerances:
+            self.unit.end_activity(UnitActivities.Acquiring)
+            # TBD: stop mount tracking?
+            return
+
         phase = 'spec'
         logger.info(f"{op}: >>>>>>>>>>>>>>>>>>>>>>>>>>")
         logger.info(f"{op}: >>> starting {phase=} <<<")
@@ -205,29 +204,34 @@ class Acquirer:
 
         spec_settings = self.unit.guider.make_guiding_settings(
             base_folder=os.path.join(self.latest_acquisition.folder, phase))
-        success = self.unit.solver.solve_and_correct(target=target,
-                                                     camera_settings=spec_settings,
-                                                     solving_tolerance=SolvingTolerance(ra_tolerance, dec_tolerance),
-                                                     phase=phase,
-                                                     parent_activity=UnitActivities.Acquiring,
-                                                     max_tries=tries)
-        logger.info(f"{op}: {phase=} " + 'succeeded' if success else 'failed')
-        if success:
-            self.unit.reference_image = self.unit.camera.image
+        achieved_tolerances = self.unit.solver.solve_and_correct(target=target,
+                                                                 camera_settings=spec_settings,
+                                                                 solving_tolerance=
+                                                                 SolvingTolerance(ra_tolerance, dec_tolerance),
+                                                                 phase=phase,
+                                                                 parent_activity=UnitActivities.Acquiring,
+                                                                 max_tries=tries)
         self.latest_acquisition.save_corrections(phase)
-        self.unit.end_activity(UnitActivities.Acquiring)
+        logger.info(f"{op}: {phase=} {achieved_tolerances=}")
+        if not achieved_tolerances:
+            self.unit.end_activity(UnitActivities.Acquiring)
+            # TBD: stop mount tracking?
+            return
+
+        self.unit.reference_image = self.unit.camera.image
 
         phase = 'guiding'
         logger.info(f"{op}: >>>>>>>>>>>>>>>>>>>>>>>>>>")
         logger.info(f"{op}: >>> starting {phase=} <<<")
         logger.info(f"{op}: >>>>>>>>>>>>>>>>>>>>>>>>>>")
+        # the guider runs until UnitActivities.Guiding is stopped
         self.unit.guider.do_guide_by_solving_with_shm(
             target=target,
             folder=os.path.join(self.latest_acquisition.folder, phase)
         )
 
         self.unit.acquirer.latest_acquisition.post_process()
-        # TBD: stop mount tracking
+        # TBD: stop mount tracking?
 
     def start_acquisition(self, ra_j2000_hours: float, dec_j2000_degs: float):
         Thread(name='acquisition', target=self.do_acquire, args=[ra_j2000_hours, dec_j2000_degs]).start()
