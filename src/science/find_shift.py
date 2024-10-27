@@ -76,4 +76,3 @@ reference_image = data[0]
 for image in data[1:]:
     [shift, error, diffphase] = find_shift_reg(reference_image, image)
     print('Shift (dy,dx): ', shift, ' Error: ', error, ' Diffphase', diffphase)
-
