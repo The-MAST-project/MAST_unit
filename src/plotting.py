@@ -122,7 +122,99 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
     plt.show()
 
 
-def plot_corrections(acquisition_folder: str | None = None):
+def plot_phase_corrections(phase: str,  # one of ['sky', 'spec', 'guiding', 'acquisition']
+                           corrections: Corrections,
+                           file: str,   # .../<date>/Acquisitions/seq=<seq-number>,time=<start-time>,target=<target>
+                           end_of_phase: List[datetime.datetime] | None = None):
+    ra_guiding_rms: float = 0
+    dec_guiding_rms: float = 0
+
+    sequence = corrections.sequence
+    if corrections.last_delta:
+        sequence.append(corrections.last_delta)
+
+    file_name_pattern = (r".*(?P<date>\d{4}-\d{2}-\d{2})\\Acquisitions\\" +
+                         r"seq=(?P<seq_number>\d+),time=(?P<start_time>\d{2}-\d{2}-\d{2}_\d{3}+)," +
+                         r"target=(?P<target>[^\\]+)")
+    match = re.search(file_name_pattern, file)
+    if match:
+        acq_date = match.group("date")
+        # acq_seq_number = match.group("seq_number")
+        acq_start_time = match.group("start_time")
+        acq_target = match.group("target")
+    else:
+        raise ValueError(f"could not extract seq_number, start_time and target from path '{file}'")
+
+    start: datetime.datetime = sequence[0].time
+    end: datetime.datetime = sequence[-1].time
+    t = [(corr.time - start).seconds for corr in sequence]
+    ra_deltas = [abs(corr.ra_delta) for corr in sequence]
+    dec_deltas = [abs(corr.dec_delta) for corr in sequence]
+
+    ra_rms_label = ''
+    dec_rms_label = ''
+
+    if phase == 'guiding':
+        square_sum = sum(x**2 for x in ra_deltas)
+        ra_guiding_rms = math.sqrt(square_sum / len(ra_deltas))
+        square_sum = sum(x**2 for x in dec_deltas)
+        dec_guiding_rms = math.sqrt(square_sum / len(dec_deltas))
+
+    plt.plot(t, ra_deltas, color=ra_color, label=f'Ra', marker='*')
+    plt.plot(t, dec_deltas, color=dec_color, label=f'Dec', marker='*')
+
+    if corrections.tolerance_dec == corrections.tolerance_ra:
+        plt.axhline(y=corrections.tolerance_ra, color=ra_color, linestyle=':',
+                    label=f'Tolerance: {corrections.tolerance_ra:.2f}')
+    else:
+        plt.axhline(y=corrections.tolerance_ra, color=ra_color, linestyle=':',
+                    label=f'RA tolerance: {corrections.tolerance_ra:.2f}')
+        plt.axhline(y=corrections.tolerance_dec, color=dec_color, linestyle=':',
+                    label=f'Dec tolerance: {corrections.tolerance_dec:.2f}')
+
+    with_label = True
+    if end_of_phase:
+        for t in end_of_phase:
+            plt.axvline(x=(t - start).seconds, linestyle='--', color='black',
+                        label=('End of phase' if with_label else None))
+            if with_label:
+                with_label = False
+
+    if phase in ['guiding', 'acquisition']:
+        ra_rms_label = Patch(color='none', label=f"RA  RMS: {ra_guiding_rms:.2f}")
+        dec_rms_label = Patch(color='none', label=f"Dec RMS: {dec_guiding_rms:.2f}")
+
+    if start.day == end.day:
+        start_time = f"{start.time().strftime('%H:%M:%S.%f')[:11]}"
+        end_time = f"{end.time().strftime('%H:%M:%S.%f')[:11]}"
+    else:
+        start_time = Patch(color='none', label=f"{start}")
+        end_time = Patch(color='none', label=f"{end}")
+
+    plt.xlabel(f'Delta time (sec), Time span: {start_time}, {end_time}')
+    plt.ylabel('Corrections in arcsec (log. scale) ')
+    plt.yscale('log')
+
+    title = f"Acquisition: {acq_date} {acq_start_time.replace('-', ':').replace('_', '.')} UT\n"
+    title += f" target: {acq_target}\n"
+    if phase != 'acquisition':
+        title += f"  phase: {phase}"
+    plt.title(f"{title}", loc='left')
+
+    labels = []
+    if phase in ['guiding', 'acquisition']:
+        labels = labels + [ra_rms_label, dec_rms_label]
+    plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + labels, loc='upper right', framealpha=.7)
+
+    plt.grid()
+
+    file = file.replace('.json', '.png')
+    plt.savefig(file, format='png')
+    # plt.clf()
+    logger.info(f"plot saved to '{file}'")
+
+
+def plot_acquisition_corrections(acquisition_folder: str | None = None):
     """
     Plots the existing corrections.json files underneath a given Acquisition folder
 
@@ -130,8 +222,6 @@ def plot_corrections(acquisition_folder: str | None = None):
     :return:
     """
     op = function_name()
-    ra_guiding_rms: float = 0
-    dec_guiding_rms: float = 0
 
     def has_corrections(_folder: str) -> bool:
         for _phase in correction_phases:
@@ -161,96 +251,6 @@ def plot_corrections(acquisition_folder: str | None = None):
     combined_corrections: Corrections | None = None
     end_of_phase: List[datetime.datetime] = []
 
-    def _plot_corrections(_phase: str,  # one of ['sky', 'spec', 'guiding']
-                          _corrections: Corrections,
-                          _file: str,   # .../<date>/Acquisitions/seq=<seq-number>,time=<start-time>,target=<target>
-                          _end_of_phase: List[datetime.datetime] | None = None):
-        nonlocal ra_guiding_rms, dec_guiding_rms
-
-        _sequence = _corrections.sequence
-
-        file_name_pattern = (r"?P<date>\d{4}-\d{2}-\d{2})/Acquisitions/seq=(?P<seq_number>\d+)," +
-                             r"time=(?P<start_time>[\d:]+),target=(?P<target>\w+)")
-        match = re.search(file_name_pattern, _file)
-        if match:
-            acq_date = match.group("date")
-            acq_seq_number = match.group("seq_number")
-            acq_start_time = match.group("start_time")
-            acq_target = match.group("target")
-        else:
-            raise ValueError(f"could not extract seq_number, start_time and target from path '{_file}'")
-
-        start: datetime.datetime = _sequence[0].time
-        end: datetime.datetime = _sequence[-1].time
-        t = [(corr.time - start).seconds for corr in _sequence]
-        ra_deltas = [abs(corr.ra_delta) for corr in _sequence]
-        dec_deltas = [abs(corr.dec_delta) for corr in _sequence]
-
-        ra_rms_label = ''
-        dec_rms_label = ''
-
-        if _phase == 'guiding':
-            square_sum = sum(x**2 for x in ra_deltas)
-            ra_guiding_rms = math.sqrt(square_sum / len(ra_deltas))
-            square_sum = sum(x**2 for x in dec_deltas)
-            dec_guiding_rms = math.sqrt(square_sum / len(dec_deltas))
-
-        plt.plot(t, ra_deltas, color=ra_color, label=f'Ra', marker='*')
-        plt.plot(t, dec_deltas, color=dec_color, label=f'Dec', marker='*')
-
-        if corrections.tolerance_dec == corrections.tolerance_ra:
-            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':',
-                        label=f'Tolerance: {corrections.tolerance_ra:.2f}')
-        else:
-            plt.axhline(y=_corrections.tolerance_ra, color=ra_color, linestyle=':',
-                        label=f'RA tolerance: {corrections.tolerance_ra:.2f}')
-            plt.axhline(y=_corrections.tolerance_dec, color=dec_color, linestyle=':',
-                        label=f'Dec tolerance: {corrections.tolerance_dec:.2f}')
-
-        with_label = True
-        if _end_of_phase:
-            for t in _end_of_phase:
-                plt.axvline(x=(t - start).seconds, linestyle='--', color='black',
-                            label=('End of phase' if with_label else None))
-                if with_label:
-                    with_label = False
-
-        if _phase in ['guiding', 'acquisition']:
-            ra_rms_label = Patch(color='none', label=f"RA  RMS: {ra_guiding_rms:.2f}")
-            dec_rms_label = Patch(color='none', label=f"Dec RMS: {dec_guiding_rms:.2f}")
-
-        if start.day == end.day:
-            start_time = f"{start.time().strftime('%H:%M:%S.%f')[:11]}"
-            end_time = f"{end.time().strftime('%H:%M:%S.%f')[:11]}"
-        else:
-            start_time = Patch(color='none', label=f"{start}")
-            end_time = Patch(color='none', label=f"{end}")
-
-        plt.xlabel(f'Delta time (sec), Time span: {start_time}, {end_time}')
-        plt.ylabel('Corrections in arcsec (log. scale) ')
-        plt.yscale('log')
-
-        title = f"Acquisition:\n"
-        title += f"   date: {acq_date}\n"
-        title += f" number: {acq_seq_number}\n"
-        title += f"   time: {acq_start_time}\n"
-        title += f" target: {acq_target}"
-        if _phase != 'acquisition':
-            title += f"  phase: {_phase}"
-        plt.title(f"{title}", loc='left')
-
-        labels = []
-        if _phase in ['guiding', 'acquisition']:
-            labels = labels + [ra_rms_label, dec_rms_label]
-        plt.legend(handles=plt.gca().get_legend_handles_labels()[0] + labels, loc='upper right', framealpha=.7)
-
-        plt.grid()
-
-        _file = _file.replace('.json', '.png')
-        plt.savefig(_file, format='png')
-        plt.clf()
-        logger.info(f"plot saved to '{_file}'")
-
     for phase in ['sky', 'spec', 'guiding']:
         file = os.path.join(acquisition_top, phase, 'corrections.json')
         if not os.path.isfile(file):
@@ -267,7 +267,7 @@ def plot_corrections(acquisition_folder: str | None = None):
         if not corrections:
             continue
         sequence = corrections.sequence
-        if corrections.last_delta:
+        if phase != 'guiding' and corrections.last_delta:
             sequence.append(corrections.last_delta)
 
         if combined_corrections is None:
@@ -281,14 +281,8 @@ def plot_corrections(acquisition_folder: str | None = None):
         combined_corrections.sequence += sequence
         end_of_phase.append(sequence[0].time)
 
-        _plot_corrections(phase, corrections, file)
-
-    _plot_corrections(
-        _phase='acquisition',
-        _corrections=combined_corrections,
-        _file=os.path.join(acquisition_top, 'corrections.json'),
-        _end_of_phase=end_of_phase,
-    )
+    plot_phase_corrections(phase='acquisition', corrections=combined_corrections,
+                           file=os.path.join(acquisition_top, 'corrections.json'), end_of_phase=end_of_phase)
 
 
 #
@@ -356,12 +350,12 @@ def test_corrections_plot():
 
     with open('C:\\Temp\\corrections.json', 'w') as f:
         json.dump(dummy, f, indent=2)
-    plot_corrections('C:\\Temp\\corrections.json')
+    plot_acquisition_corrections('C:\\Temp\\corrections.json')
 
 
 if __name__ == '__main__':
     acq_folder = Filer().find_latest(Filer().shared.root, pattern='*,target=*', qualifier=os.path.isdir)
-    plot_corrections(acq_folder)
+    plot_acquisition_corrections(acq_folder)
     # plot_autofocus_analysis(DummyResult(), 'C:\\Temp')
     # test_corrections_plot()
     pass
