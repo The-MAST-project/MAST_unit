@@ -61,12 +61,16 @@ def find_shift_reg(image1, image2):
 ########################
 # Main
 
-image1 = '2024-10-09/sky_last.fits'
-image2 = '2024-10-09/spec_first.fits'
+image1 = 'sky-last.fits'
+image2 = 'spec-first.fits'
+
+with fits.open(image1) as hdul:
+    data = hdul[0].data
+    dimensions = data.shape
 
 # Define the dimensions (half) of the required trimmed image around the center
-x_dim = 1500
-y_dim = 1500
+y_dim = dimensions[0] // 2
+x_dim = dimensions[1] // 2
 
 trim_fits(image2, x_dim, y_dim)
 
