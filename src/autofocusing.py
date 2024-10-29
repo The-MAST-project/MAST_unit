@@ -8,13 +8,15 @@ from common.config import Config
 import logging
 import time
 import os
-from typing import List
+from typing import List, Optional
 from PlaneWave.ps3cli_client import PS3CLIClient
 from camera import CameraSettings, CameraBinning
 from stage import StagePresetPosition
 from common.activities import UnitActivities, FocuserActivities
 from common.utils import UnitRoi
+from common.extended_basemodel import ExtendedBaseModel
 from plotting import plot_autofocus_analysis
+import math
 
 logger = logging.getLogger('mast.unit.' + __name__)
 init_log(logger)
@@ -27,46 +29,30 @@ class AutofocusResult:
     time_stamp: str
 
 
-class PS3FocusSample:
-
-    def __init__(self, d: dict):
-        self.is_valid: bool = d.get('is_valid', False)
-        self.focus_position: float | None = d.get('focus_position', None)
-        self.num_stars: int | None = d.get('num_stars', None)
-        self.star_rms_diameter_pixels: float | None = d.get('star_rms_diameter_pixels', None)
-        self.vcurve_star_rms_diameter_pixels: float | None = d.get('vcurve_star_rms_diameter_pixels', None)
+class PS3FocusSample(ExtendedBaseModel):
+    is_valid: bool
+    focus_position: Optional[float] = None
+    num_stars: Optional[int] = None
+    star_rms_diameter_pixels: Optional[float] = None
+    vcurve_star_rms_diameter_pixels: Optional[float] = None
 
 
-class PS3FocusAnalysisResult:
-
-    def __init__(self, d: dict):
-        self.has_solution: bool = d.get('has_solution', False)
-        self.best_focus_position: float | None = d.get('best_focus_position', None)
-        self.best_focus_star_diameter: float | None = d.get('best_focus_star_diameter', None)
-        self.tolerance: float | None = d.get('tolerance', None)
-        self.vcurve_a: float | None = d.get('vcurve_a', None)
-        self.vcurve_b: float | None = d.get('vcurve_b', None)
-        self.vcurve_c: float | None = d.get('vcurve_c', None)
-        self.focus_samples: List[PS3FocusSample] = []
-        for s in d.get('focus_samples', []):
-            self.focus_samples.append(PS3FocusSample(s))
+class PS3FocusAnalysisResult(ExtendedBaseModel):
+    has_solution: bool
+    best_focus_position: Optional[float]
+    best_focus_star_diameter: Optional[float]
+    tolerance: Optional[float]
+    vcurve_a: Optional[float]
+    vcurve_b: Optional[float]
+    vcurve_c: Optional[float]
+    focus_samples: List[PS3FocusSample] = []
 
 
-class PS3AutofocusStatus:
-
-    def __init__(self, d: dict):
-        """
-        Parses a dictionary into a PS3AutofocusStatus instance
-        :param d:
-        """
-
-        self.is_running: bool = d.get('is_running', False)
-        self.last_log_message: str | None = d.get('last_log_message', None)
-        self.error_message: str | None = d.get('error_message', None)
-        self.analysis_result = None
-        d1 = d.get('analysis_result', None)
-        if d1:
-            self.analysis_result: PS3FocusAnalysisResult = PS3FocusAnalysisResult(d1)
+class PS3AutofocusStatus(ExtendedBaseModel):
+    is_running: bool
+    last_log_message: Optional[str] = None
+    error_message: Optional[str] = None
+    analysis_result: PS3FocusAnalysisResult
 
 
 class Autofocuser:
@@ -238,7 +224,6 @@ class Autofocuser:
             ps3_client.begin_analyze_focus(files)
 
             status: PS3AutofocusStatus | None = None
-            d: dict | None = None
             timeout = 60
             start = datetime.datetime.now()
             end = start + datetime.timedelta(seconds=timeout)
@@ -248,7 +233,7 @@ class Autofocuser:
                 if d is None:
                     time.sleep(.1)
                     continue
-                status = PS3AutofocusStatus(d)
+                status = PS3AutofocusStatus(**d)
                 if not status.is_running:
                     time.sleep(.1)
                 else:
@@ -263,7 +248,7 @@ class Autofocuser:
             while datetime.datetime.now() < end:
                 # wait for the autofocus analyser to stop running
                 s = ps3_client.focus_status()
-                status: PS3AutofocusStatus = PS3AutofocusStatus(s)
+                status: PS3AutofocusStatus = PS3AutofocusStatus(**s)
                 logger.info(f"{op}: {s=}")
                 if not status.is_running:
                     break
@@ -297,7 +282,7 @@ class Autofocuser:
             logger.info(f"{op}: analysis result: " +
                         f"{result.best_focus_position=}, {result.best_focus_star_diameter=}, {result.tolerance=}")
 
-            if result.tolerance > max_tolerance:
+            if math.isnan(result.tolerance) or result.tolerance > max_tolerance:
                 logger.info(f"{op}: {result.tolerance=} is higher than {max_tolerance=}, ignoring this solution")
                 continue  # next try_number
 

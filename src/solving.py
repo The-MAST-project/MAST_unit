@@ -4,10 +4,11 @@ import os.path
 from common.utils import function_name, Coord
 from common.mast_logging import init_log
 from common.filer import Filer
+from common.extended_basemodel import ExtendedBaseModel
 from acquisition import Acquisition
 import logging
 import time
-from typing import List
+from typing import List, Literal, Optional
 from PlaneWave.ps3cli_client import PS3CLIClient
 from camera import CameraSettings
 from common.activities import UnitActivities
@@ -35,26 +36,26 @@ class PlateSolverExitCode(IntFlag):
     GeneralFailure = 99
 
 
-class PlateSolverResult:
+class PlateSolverResult(ExtendedBaseModel):
     succeeded: bool = False
-    ra_j2000_hours: float | None = None
-    dec_j2000_degrees: float | None = None
-    arcsec_per_pixel: float | None = None
-    rot_angle_degs: float | None = None
-    errors: List[str] = []
+    ra_j2000_hours: Optional[float] = None
+    dec_j2000_degrees: Optional[float] = None
+    arcsec_per_pixel: Optional[float] = None
+    rot_angle_degs: Optional[float] = None
+    errors: Optional[List[str]] = []
 
-    def __init__(self, d):
-        self.succeeded = d['succeeded']
-        if 'ra_j2000_hours' in d:
-            self.ra_j2000_hours = d['ra_j2000_hours']
-        if 'dec_j2000_degrees' in d:
-            self.dec_j2000_degrees = d['dec_j2000_degrees']
-        if 'rot_angle_degs' in d:
-            self.rot_angle_degs = d['rot_angle_degs']
-        if 'arcsec_per_pixel' in d:
-            self.arcsec_per_pixel = d['arcsec_per_pixel']
-        if 'errors' in d:
-            self.errors = d['errors']
+    # def __init__(self, d):
+    #     self.succeeded = d['succeeded']
+    #     if 'ra_j2000_hours' in d:
+    #         self.ra_j2000_hours = d['ra_j2000_hours']
+    #     if 'dec_j2000_degrees' in d:
+    #         self.dec_j2000_degrees = d['dec_j2000_degrees']
+    #     if 'rot_angle_degs' in d:
+    #         self.rot_angle_degs = d['rot_angle_degs']
+    #     if 'arcsec_per_pixel' in d:
+    #         self.arcsec_per_pixel = d['arcsec_per_pixel']
+    #     if 'errors' in d:
+    #         self.errors = d['errors']
 
     @staticmethod
     def from_file(file: str) -> 'PlateSolverResult':
@@ -66,56 +67,30 @@ class PlateSolverResult:
                     ret[k] = v
             ret['succeeded'] = all(['ra_j2000_hours' in ret, 'dec_j2000_degrees' in ret,
                                     'arcsec_per_pixel' in ret, 'rot_angle_degs' in ret])
-            return PlateSolverResult(ret)
+            return PlateSolverResult(**ret)
 
         except Exception as e:
             logger.error(f"{e}")
-            return PlateSolverResult(ret)
+            return PlateSolverResult(**ret)
 
 
-class PS3SolvingSolution:
+class PS3SolvingSolution(ExtendedBaseModel):
     num_matched_stars: int
     match_rms_error_arcsec: float
-    match_rms_error_pixels: int
+    match_rms_error_pixels: float
     center_ra_j2000_rads: float
     center_dec_j2000_rads: float
     matched_arcsec_per_pixel: float
     rotation_angle_degs: float
 
-    def __init__(self, d: dict):
-        if d is None:
-            self.num_matched_stars = 0
-            self.match_rms_error_arcsec = 0
-            self.match_rms_error_pixels = 0
-            self.center_ra_j2000_rads = 0
-            self.center_dec_j2000_rads = 0
-            self.matched_arcsec_per_pixel = 0
-            self.rotation_angle_degs = 0
-        else:
-            self.num_matched_stars = d['num_matched_stars']
-            self.match_rms_error_arcsec = d['match_rms_error_arcsec']
-            self.match_rms_error_pixels = d['match_rms_error_pixels']
-            self.center_ra_j2000_rads = d['center_ra_j2000_rads']
-            self.center_dec_j2000_rads = d['center_dec_j2000_rads']
-            self.matched_arcsec_per_pixel = d['matched_arcsec_per_pixel']
-            self.rotation_angle_degs = d['rotation_angle_degs']
 
-
-class PS3SolvingResult:
-    state: str              # 'ready', 'loading', 'extracting', 'matching', 'found_match', 'no_match', 'error'
-    error_message: str
-    last_log_message: str
-    num_extracted_stars: int
-    running_time_seconds: float
-    solution: PS3SolvingSolution
-
-    def __init__(self, d: dict):
-        self.state: str = d['state']
-        self.error_message: str | None = d['error_message'] if 'error_message' in d else None
-        self.last_log_message: str | None = d['last_log_message'] if 'last_log_message' in d else None
-        self.num_extracted_stars: int = d['num_extracted_stars'] if 'num_extracted_stars' in d else 0
-        self.running_time_seconds: float = d['running_time_seconds'] if 'running_time_seconds' in d else 0
-        self.solution: PS3SolvingSolution | None = PS3SolvingSolution(d['solution']) if 'solution' in d else None
+class PS3SolvingResult(ExtendedBaseModel):
+    state: Literal['ready', 'loading', 'extracting', 'matching', 'found_match', 'no_match', 'error', 'unknown']
+    error_message: Optional[str] = None
+    last_log_message: Optional[str] = None
+    num_extracted_stars: Optional[int] = None
+    running_time_seconds: Optional[float] = None
+    solution: Optional[PS3SolvingSolution] = None
 
 
 class SolvingTolerance:
@@ -147,7 +122,7 @@ class Solver:
             response = self.unit.camera.do_start_exposure(settings)
             if response.failed:
                 logger.error(f"{op}: could not start acquisition exposure: {response=}")
-                return PS3SolvingResult({
+                return PS3SolvingResult(**{
                     'state': 'error',
                     'error_message': f'could not start exposure ({[response.errors]})'
                 })
@@ -188,7 +163,7 @@ class Solver:
 
             solver_status: PS3SolvingResult
             while True:
-                solver_status = PS3SolvingResult(ps3_client.platesolve_status())
+                solver_status = PS3SolvingResult(**ps3_client.platesolve_status())
 
                 if (solver_status.state == 'error' or
                         solver_status.state == 'no_match' or
@@ -197,7 +172,7 @@ class Solver:
 
                 if datetime.datetime.now() >= end:
                     ps3_client.platesolve_cancel()
-                    solver_status = PS3SolvingResult({
+                    solver_status = PS3SolvingResult(**{
                         'state': 'error',
                         'error_message': f'time out ({timeout_seconds} seconds), cancelled'
                     })
@@ -223,19 +198,16 @@ class Solver:
         - Plate solve the image
         - If the solved coordinates are NOT within the solving_tolerance from the target, correct the mount
 
-        Parameters
-        ----------
-        target: (ra, dec)
-        camera_settings: camera settings for the exposure
-        solving_tolerance: how close do we need to be to stop trying
-        parent_activity: This function may be called from within a parent activity (Guiding, Acquiring, etc.).  If the
-           parent_activity is stopped, we stop as well
-        max_tries: How many times to try to get withing the solving_tolerance
-        phase:
 
-        Returns
-        -------
-        boolean: True if succeeded within max_tries to get within solving_tolerance
+        :param target: (ra, dec) tuple
+        :param camera_settings: Camera settings for the exposure
+        :param solving_tolerance: How close do we need to be to stop trying
+        :param parent_activity: If the parent_activity (e.g. UnitActivities.Acquiring, UnitActivities.Guiding) is stopped, this function stops as well
+        :param max_tries: How many times to try to get withing the solving_tolerance
+        :param phase: One of ['sky', 'spec', 'guiding']
+
+        :rtype: bool
+        :return: True if succeeded to achieve tolerances within max_tries, False otherwise
 
         """
         op = function_name()
@@ -244,135 +216,157 @@ class Solver:
 
         self.unit.start_activity(UnitActivities.Solving)
 
-        try_number: int = 0
+        if not self.unit.acquirer.latest_acquisition:
+            # when not part of an acquisition sequence
+            self.unit.acquirer.latest_acquisition = Acquisition(
+                target.ra.arcsecond,
+                target.dec.arcsecond,
+                {
+                    'tolerance': {
+                        'ra_arcsec': solving_tolerance.ra.arcsecond,
+                        'dec_arcsec': solving_tolerance.dec.arcsecond,
+                    }
+                }
+            )
+            self.unit.acquirer.latest_acquisition.corrections = {}
+
+        if phase not in self.unit.acquirer.latest_acquisition.corrections:
+            # in case there were no corrections yet for this phase
+            self.unit.acquirer.latest_acquisition.corrections[phase] = Corrections(
+                phase=phase,
+                target_ra=target.ra.hour,
+                target_dec=target.dec.deg,
+                tolerance_ra=solving_tolerance.ra.arcsecond,
+                tolerance_dec=solving_tolerance.dec.arcsecond,
+            )
+        latest_corrections = self.unit.acquirer.latest_acquisition.corrections[phase]
+
         for try_number in range(max_tries):
-            if parent_activity is not None and not self.unit.is_active(parent_activity):  # have we been cancelled?
+            if parent_activity and not self.unit.is_active(parent_activity):  # have we been cancelled?
                 return False
 
             logger.info(f"{op}: calling plate_solve ({try_number=} of {max_tries=})")
 
-            result = self.plate_solve(target=target, settings=camera_settings)
-            result_file_name = camera_settings.image_path.replace('.fits', '.result')
+            # run the plate solver
+            result = None
+            try:
+                result = self.plate_solve(target=target, settings=camera_settings)
+            except TimeoutError:
+                logger.error(f"plate solving timed out, continuing ...")
+                continue
+
             self.latest_result = result
+            if result is None:
+                logger.error(f"{op}: plate_solve returned None")
+                continue
 
+            # save the solver result for debugging
+            result_file_name = camera_settings.image_path.replace('.fits', '-solver_result.json')
             os.makedirs(os.path.dirname(result_file_name), exist_ok=True)
-            with open(result_file_name) as fp:
-                json.dump(result, fp, indent=2)
+            with open(result_file_name, 'w') as fp:
+                fp.write(json.dumps(result.dict(), indent=2))
+            time.sleep(2)
+            Filer().move_ram_to_shared(result_file_name)
 
-            if result.state != 'found_match':
+            #
+            # From "PlateSolve3 server documentation"
+            #
+            # state: Indicates the state of the solver as one of the following values:
+            # 	ready: Solver has not yet attempted a solve since starting, but is ready to accept a request
+            # 	loading: Solver is loading the image
+            # 	extracting: Solver is locating stars within the image
+            # 	matching: Solver is attempting to match detected stars to the star catalog
+            # 	found_match: Solver successfully performed a match and is finished processing
+            # 	no_match: Solver failed to find a match and is finished processing
+            # 	error: An error occurred and processing was stopped
+            #
+            # error_message: If "state" == "error", this contains a string describing the error. Otherwise, this is null
+            #
+            # last_log_message: A string containing a report of the most recently-performed step in the solver
+            #
+
+            if result.state in ['no_match', 'error', 'unknown']:
                 msg = None
                 if result.error_message:
-                    msg = result.error_message
+                    msg = f"error_message: '{result.error_message}'"
                 elif result.last_log_message:
-                    msg = result.last_log_message
+                    msg = f"last_log_message: '{result.last_log_message}'"
+                self.unit.errors.append(f"{op}: {try_number=}, {result.state=}, {msg=}")
                 logger.info(f"{op}: plate solver failed state={result.state}, {msg=}")
                 self.unit.end_activity(UnitActivities.Solving)
-                return False
+                continue  # next try
 
-            logger.info(f">>>>> plate solver found a match, YEY, YEPEEE, HURRAY !!! <<<")
-            solved_ra_arcsec: float = Angle(result.solution.center_ra_j2000_rads * u.radian).arcsecond
-            solved_dec_arcsec: float = Angle(result.solution.center_dec_j2000_rads * u.radian).arcsecond
+            elif result.state == 'found_match':
+                logger.info(f"{op}: >>>>> plate solver found a match, YEY, YEPEEE, HURRAY !!! <<<")
+                solved_ra_arcsec: float = Angle(result.solution.center_ra_j2000_rads * u.radian).arcsecond
+                solved_dec_arcsec: float = Angle(result.solution.center_dec_j2000_rads * u.radian).arcsecond
 
-            delta_dec_arcsec: float = target.dec.arcsecond - solved_dec_arcsec
-            ang_rad: float = Angle(((target.dec.arcsecond + solved_dec_arcsec) / 2) * u.arcsecond).radian
-            delta_ra_arcsec: float = (target.ra.arcsecond - solved_ra_arcsec) * math.cos(ang_rad)
+                delta_dec_arcsec: float = target.dec.arcsecond - solved_dec_arcsec
+                ang_rad: float = Angle(((target.dec.arcsecond + solved_dec_arcsec) / 2) * u.arcsecond).radian
+                delta_ra_arcsec: float = (target.ra.arcsecond - solved_ra_arcsec) * math.cos(ang_rad)
 
-            coord_solved = Coord(ra=Angle(result.solution.center_ra_j2000_rads * u.radian),
-                                 dec=Angle(result.solution.center_dec_j2000_rads * u.radian))
-            coord_delta = Coord(ra=Angle(delta_ra_arcsec * u.arcsecond), dec=Angle(delta_dec_arcsec * u.arcsecond))
-            coord_tolerance = Coord(ra=solving_tolerance.ra, dec=solving_tolerance.dec)
-            logger.info(f"target: {target}, solved: {coord_solved}, delta: {coord_delta}, tolerance: {coord_tolerance}")
+                coord_solved = Coord(ra=Angle(result.solution.center_ra_j2000_rads * u.radian),
+                                     dec=Angle(result.solution.center_dec_j2000_rads * u.radian))
+                coord_delta = Coord(ra=Angle(delta_ra_arcsec * u.arcsecond), dec=Angle(delta_dec_arcsec * u.arcsecond))
+                coord_tolerance = Coord(ra=solving_tolerance.ra, dec=solving_tolerance.dec)
+                logger.info(f"{op}: target: {target}, solved: {coord_solved}, delta: {coord_delta}, " +
+                            f"tolerance: {coord_tolerance}")
 
-            if (abs(delta_ra_arcsec) <= solving_tolerance.ra.arcsecond and
-                    abs(delta_dec_arcsec) <= solving_tolerance.dec.arcsecond):
-                #
-                # Within tolerance, no correction is needed
-                #
-                logger.info(f"{op}: within tolerances, deltas: ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) " +
-                            f"tolerance: ({solving_tolerance.ra.arcsecond:.9f}, " +
-                            f"{solving_tolerance.dec.arcsecond:.9f})")
-                
-                if phase in ['sky', 'spec']:
+                if (abs(delta_ra_arcsec) <= solving_tolerance.ra.arcsecond and
+                        abs(delta_dec_arcsec) <= solving_tolerance.dec.arcsecond):
                     #
-                    # The 'sky' and 'spec' phases end when within tolerance
-                    # The 'guiding' phase keeps going until the parent_activity is ended
+                    # Within tolerance, no correction is needed
                     #
-                    self.unit.end_activity(UnitActivities.Solving)
-                    if phase not in self.unit.acquirer.latest_acquisition.corrections:
-                        # in case there were no corrections for this phase
-                        self.unit.acquirer.latest_acquisition.corrections[phase] = Corrections(
-                            phase=phase,
-                            target_ra=target.ra.hour,
-                            target_dec=target.dec.deg,
-                            tolerance_ra=solving_tolerance.ra.arcsecond,
-                            tolerance_dec=solving_tolerance.dec.arcsecond,
-                        )
-                    corrections = self.unit.acquirer.latest_acquisition.corrections[phase]
-                    corrections.last_delta = Correction(
-                        time=datetime.datetime.now(), 
-                        ra_arcsec=delta_ra_arcsec, 
+                    logger.info(f"{op}: within tolerances, deltas: ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) " +
+                                f"tolerance: ({solving_tolerance.ra.arcsecond:.9f}, " +
+                                f"{solving_tolerance.dec.arcsecond:.9f})")
+
+                    latest_corrections.last_delta = Correction(
+                        time=datetime.datetime.now(datetime.UTC),
+                        ra_arcsec=delta_ra_arcsec,
                         dec_arcsec=delta_dec_arcsec
                     )
-                    
+
                     file_name = os.path.join(camera_settings.folder, 'corrections.json')
                     with open(file_name, 'w') as f:
-                        json.dump(corrections.to_dict(), f, indent=2)
-    
-                    # Filer().move_ram_to_shared(file_name)
-                    break
+                        json.dump(latest_corrections.to_dict(), f, indent=2)
+                    Filer().move_ram_to_shared(file_name)
 
-            if parent_activity is not None and not self.unit.is_active(parent_activity):  # have we been canceled?
-                return False
+                    self.unit.end_activity(UnitActivities.Solving)
+                    return True
 
-            #
-            # We're outside tolerance, we need another iteration
-            #
-            logger.info(f"{op}: outside tolerances, deltas: ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) " +
-                        f"tolerance: ({solving_tolerance.ra.arcsecond:.9f}, {solving_tolerance.dec.arcsecond:.9f})")
-            logger.info(f"{op}: offsetting mount by ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) arcsec ...")
+                else:
+                    #
+                    # Outside of tolerance, need to correct
+                    #
+                    logger.info(f"{op}: outside of tolerances, deltas: ({delta_ra_arcsec:.9f}, " +
+                                f"{delta_dec_arcsec:.9f}) " +
+                                f"tolerance: ({solving_tolerance.ra.arcsecond:.9f}, " +
+                                f"{solving_tolerance.dec.arcsecond:.9f})")
+                    logger.info(f"{op}: OFFSETTING MOUNT BY ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) arcsec ...")
 
-            if not self.unit.acquirer.latest_acquisition:
-                # when not part of an acquisition sequence
-                self.unit.acquirer.latest_acquisition = Acquisition(
-                    target.ra.arcsecond,
-                    target.dec.arcsecond,
-                    {
-                        'tolerance': {
-                            'ra_arcsec': solving_tolerance.ra.arcsecond,
-                            'dec_arcsec': solving_tolerance.dec.arcsecond,
-                        }
-                    }
-                )
+                    latest_corrections.sequence.append(Correction(
+                        time=datetime.datetime.now(datetime.UTC),
+                        ra_arcsec=delta_ra_arcsec,
+                        dec_arcsec=delta_dec_arcsec,
+                    ))
 
-            if phase not in self.unit.acquirer.latest_acquisition.corrections:
-                # first correction in this acquisition phase
-                self.unit.acquirer.latest_acquisition.corrections[phase] = Corrections(
-                    phase=phase,
-                    target_ra=target.ra.hour,
-                    target_dec=target.dec.deg,
-                    tolerance_ra=solving_tolerance.ra.arcsecond,
-                    tolerance_dec=solving_tolerance.dec.arcsecond)
+                    self.unit.start_activity(UnitActivities.Correcting)
+                    self.unit.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
+                    while self.unit.mount.is_slewing:
+                        time.sleep(.5)
+                    logger.info(f"sleeping 5 additional seconds to let the mount stop moving ...")
+                    time.sleep(5)
+                    self.unit.end_activity(UnitActivities.Correcting)
+                    self.unit.errors.append(f"{op}: {try_number=}, " +
+                                            f"corrected by {delta_ra_arcsec=:.6f}, {delta_dec_arcsec=:.6f}")
+            else:
+                logger.error(f"{op}: unknown/unexpected solver state '{result.state=}', continuing ...")
+                continue    # next try
 
-            self.unit.acquirer.latest_acquisition.corrections[phase].sequence.append(Correction(
-                time=datetime.datetime.now(),
-                ra_arcsec=delta_ra_arcsec,
-                dec_arcsec=delta_dec_arcsec,
-            ))
+        #
+        # By now the tries have been exhausted, and we're still not within tolerance
+        #
 
-            self.unit.start_activity(UnitActivities.Correcting)
-            self.unit.pw.mount_offset(ra_add_arcsec=delta_ra_arcsec, dec_add_arcsec=delta_dec_arcsec)
-            while self.unit.mount.is_slewing:
-                time.sleep(.5)
-            time.sleep(5)
-            self.unit.end_activity(UnitActivities.Correcting)
-            logger.info(f"{op}: mount stopped moving")
-
-        if phase in ['sky', 'spec'] and try_number == max_tries - 1:
-            self.unit.end_activity(UnitActivities.Solving)
-            logger.info(f"{op}: could not reach tolerances within {max_tries=}")
-            return False
-
-        camera_settings.make_file_name()  # prepare a current file name for the following iteration
-        # give it another try ...
-
-        return True
+        logger.info(f"{op}: could not reach tolerances within {max_tries=}")
+        return False
