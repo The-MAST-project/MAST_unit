@@ -44,19 +44,6 @@ class PlateSolverResult(ExtendedBaseModel):
     rot_angle_degs: Optional[float] = None
     errors: Optional[List[str]] = []
 
-    # def __init__(self, d):
-    #     self.succeeded = d['succeeded']
-    #     if 'ra_j2000_hours' in d:
-    #         self.ra_j2000_hours = d['ra_j2000_hours']
-    #     if 'dec_j2000_degrees' in d:
-    #         self.dec_j2000_degrees = d['dec_j2000_degrees']
-    #     if 'rot_angle_degs' in d:
-    #         self.rot_angle_degs = d['rot_angle_degs']
-    #     if 'arcsec_per_pixel' in d:
-    #         self.arcsec_per_pixel = d['arcsec_per_pixel']
-    #     if 'errors' in d:
-    #         self.errors = d['errors']
-
     @staticmethod
     def from_file(file: str) -> 'PlateSolverResult':
         ret = {'succeeded': True}
@@ -121,7 +108,7 @@ class Solver:
             logger.info(f'{op}: starting {settings.seconds=} acquisition exposure')
             response = self.unit.camera.do_start_exposure(settings)
             if response.failed:
-                logger.error(f"{op}: could not start acquisition exposure: {response=}")
+                self.log_and_store_error(f"{op}: could not start acquisition exposure: {response=}")
                 return PS3SolvingResult(**{
                     'state': 'error',
                     'error_message': f'could not start exposure ({[response.errors]})'
@@ -252,12 +239,12 @@ class Solver:
             try:
                 result = self.plate_solve(target=target, settings=camera_settings)
             except TimeoutError:
-                logger.error(f"plate solving timed out, continuing ...")
+                self.log_and_store_error(f"plate solving timed out, continuing ...")
                 continue
 
             self.latest_result = result
             if result is None:
-                logger.error(f"{op}: plate_solve returned None")
+                self.log_and_store_error(f"{op}: {try_number=}, plate_solve returned None")
                 continue
 
             # save the solver result for debugging
@@ -291,8 +278,7 @@ class Solver:
                     msg = f"error_message: '{result.error_message}'"
                 elif result.last_log_message:
                     msg = f"last_log_message: '{result.last_log_message}'"
-                self.unit.errors.append(f"{op}: {try_number=}, {result.state=}, {msg=}")
-                logger.info(f"{op}: plate solver failed state={result.state}, {msg=}")
+                self.log_and_store_error(f"{op}: {try_number=}, plate solver failed, {result.state=}, {msg=}")
                 self.unit.end_activity(UnitActivities.Solving)
                 continue  # next try
 
@@ -343,7 +329,7 @@ class Solver:
                                 f"{delta_dec_arcsec:.9f}) " +
                                 f"tolerance: ({solving_tolerance.ra.arcsecond:.9f}, " +
                                 f"{solving_tolerance.dec.arcsecond:.9f})")
-                    logger.info(f"{op}: OFFSETTING MOUNT BY ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) arcsec ...")
+                    logger.info(f"{op}: --- OFFSETTING BY ({delta_ra_arcsec:.9f}, {delta_dec_arcsec:.9f}) arcsec ---")
 
                     latest_corrections.sequence.append(Correction(
                         time=datetime.datetime.now(datetime.UTC),
@@ -358,10 +344,10 @@ class Solver:
                     logger.info(f"sleeping 5 additional seconds to let the mount stop moving ...")
                     time.sleep(5)
                     self.unit.end_activity(UnitActivities.Correcting)
-                    self.unit.errors.append(f"{op}: {try_number=}, " +
+                    logger.info(f"{op}: {try_number=}, " +
                                             f"corrected by {delta_ra_arcsec=:.6f}, {delta_dec_arcsec=:.6f}")
             else:
-                logger.error(f"{op}: unknown/unexpected solver state '{result.state=}', continuing ...")
+                self.log_and_store_error(f"{op}: unknown/unexpected solver state '{result.state=}', continuing ...")
                 continue    # next try
 
         #
@@ -370,3 +356,8 @@ class Solver:
 
         logger.info(f"{op}: could not reach tolerances within {max_tries=}")
         return False
+
+    def log_and_store_error(self, message: str):
+        logger.error(message)
+        self.unit.errors.append(message)
+

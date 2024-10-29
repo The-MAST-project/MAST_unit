@@ -45,7 +45,7 @@ class PS3FocusAnalysisResult(ExtendedBaseModel):
     vcurve_a: Optional[float]
     vcurve_b: Optional[float]
     vcurve_c: Optional[float]
-    focus_samples: List[PS3FocusSample] = []
+    focus_samples: Optional[List[PS3FocusSample]] = []
 
 
 class PS3AutofocusStatus(ExtendedBaseModel):
@@ -239,7 +239,7 @@ class Autofocuser:
                 else:
                     break
             if datetime.datetime.now() >= end:
-                logger.error(f"{op}: autofocus analyser did not start within {timeout} seconds")
+                self.log_and_store_error(f"{op}: autofocus analyser did not start within {timeout} seconds")
                 Filer().move_ram_to_shared(autofocus_folder)
                 self.unit.end_activity(UnitActivities.AutofocusAnalysis)
                 self.unit.end_activity(UnitActivities.AutofocusingWIS)
@@ -256,7 +256,7 @@ class Autofocuser:
                     time.sleep(.5)
 
             if datetime.datetime.now() >= end:
-                logger.error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
+                self.log_and_store_error(f"{op}: autofocus analyser did not finish within {timeout} seconds")
                 ps3_client.close()
                 Filer().move_ram_to_shared(autofocus_folder)
                 self.unit.end_activity(UnitActivities.AutofocusAnalysis)
@@ -266,12 +266,12 @@ class Autofocuser:
             self.unit.end_activity(UnitActivities.AutofocusAnalysis)
 
             if not status.analysis_result:
-                logger.error(f"{op}: focus analyser stopped working but empty analysis_result")
+                self.log_and_store_error(f"{op}: focus analyser stopped working but empty analysis_result")
                 Filer().move_ram_to_shared(autofocus_folder)
                 continue  # next try_number
 
             if not status.analysis_result.has_solution:
-                logger.error(f"{op}: focus analyser did not find a solution")
+                self.log_and_store_error(f"{op}: focus analyser did not find a solution")
                 Filer().move_ram_to_shared(autofocus_folder)
                 continue  # next try_number
 
@@ -283,7 +283,8 @@ class Autofocuser:
                         f"{result.best_focus_position=}, {result.best_focus_star_diameter=}, {result.tolerance=}")
 
             if math.isnan(result.tolerance) or result.tolerance > max_tolerance:
-                logger.info(f"{op}: {result.tolerance=} is higher than {max_tolerance=}, ignoring this solution")
+                self.log_and_store_error(f"{op}: {result.tolerance=} is either NaN or higher than {max_tolerance=}, " +
+                                         f"ignoring it!")
                 continue  # next try_number
 
             position: int = int(result.best_focus_position)
@@ -302,8 +303,8 @@ class Autofocuser:
                 logger.info(f"saved unit '{self.unit.hostname}' configuration for " +
                             f"focuser known-as-good-position {position}")
             except Exception as e:
-                logger.error(f"could not save unit '{self.unit.hostname}' " +
-                             f"configuration for focuser known-as-good-position (exception: {e})")
+                self.log_and_store_error(f"could not save unit '{self.unit.hostname}' " +
+                                         f"configuration for focuser known-as-good-position (exception: {e})")
 
             Filer().move_ram_to_shared(autofocus_folder)
             pixel_scale: float = self.unit.unit_conf['camera']['pixel_scale_at_bin1']
@@ -313,7 +314,7 @@ class Autofocuser:
             break  # the tries loop
 
         if try_number == max_tries - 1:
-            logger.error(f"{op}: could not achieve {max_tolerance=} within {max_tries=}")
+            self.log_and_store_error(f"{op}: could not achieve {max_tolerance=} within {max_tries=}")
 
         self.unit.end_activity(UnitActivities.AutofocusingWIS)
 
@@ -365,3 +366,7 @@ class Autofocuser:
         elif self.unit.is_active(UnitActivities.AutofocusingWIS):
             self.unit.end_activity(UnitActivities.AutofocusingWIS)
             return CanonicalResponse_Ok
+
+    def log_and_store_error(self, message: str):
+        logger.error(message)
+        self.unit.errors.append(message)
