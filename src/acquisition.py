@@ -1,8 +1,9 @@
+import datetime
 import logging
 from common.paths import PathMaker
 from common.mast_logging import init_log
 from common.corrections import Corrections
-from plotting import plot_corrections
+from plotting import plot_acquisition_corrections, plot_phase_corrections
 import os
 import json
 from common.filer import Filer
@@ -30,7 +31,11 @@ class Acquisition:
             path = os.path.join(self.folder, phase, 'corrections.json')
             with open(path, 'w') as fp:
                 json.dump((self.corrections[phase]).to_dict(), fp, indent=2)
-                Filer().move_ram_to_shared(path)
+            plot_phase_corrections(phase=phase, corrections=self.corrections[phase],
+                                   file=path,
+                                   end_of_phase=[datetime.datetime.now(datetime.UTC)])
+            Filer().move_ram_to_shared(path)
+            Filer().move_ram_to_shared(path.replace('json', 'png'))
 
     def post_process(self):
-        plot_corrections(self.folder.replace(Filer().ram.root, Filer().shared.root))
+        plot_acquisition_corrections(self.folder.replace(Filer().ram.root, Filer().shared.root))
