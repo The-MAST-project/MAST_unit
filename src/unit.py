@@ -8,7 +8,7 @@ import numpy as np
 import camera
 from PlaneWave import pwi4_client
 import time
-from typing import List, Any
+from typing import List, Any, Optional, Union
 from camera import Camera, CameraBinning
 from covers import Covers
 from stage import Stage
@@ -62,7 +62,7 @@ class Unit(Component):
             logger.info(f"Unit.__new__: allocated instance 0x{id(cls._instance):x}")
         return cls._instance
 
-    def __init__(self, id_: int | str):
+    def __init__(self, id_: Union[int, str]):
         if self._initialized:
             return
         logger.info(f"Unit.__init__: initiating instance 0x{id(self):x}")
@@ -81,8 +81,10 @@ class Unit(Component):
         file_handler = [h for h in logger.handlers if isinstance(h, DailyFileHandler)]
         logger.info(f"logging to '{file_handler[0].path}'")
 
-        if isinstance(id_, int) and not 1 <= id_ <= Unit.MAX_UNITS:
+        if isinstance(id_, int) and id_ <= id_ <= Unit.MAX_UNITS:
             raise f"Bad unit id '{id_}', must be in [1..{Unit.MAX_UNITS}]"
+        else:
+            id_ = int(id_)
 
         self.id = id_
         self.unit_conf = Config().get_unit()
@@ -131,7 +133,7 @@ class Unit(Component):
         self.timer.start()
 
         self.reference_image = None
-        self.autofocus_result: AutofocusResult | None = None
+        self.autofocus_result: Optional[AutofocusResult] = None
 
         self._was_shut_down = False
 
@@ -139,18 +141,6 @@ class Unit(Component):
         # self.camera.register_visualizer('image-to-dashboard', self.push_image_to_dashboards)
 
         self.errors: List[str] = []
-
-        # corrections for each acquisition phase
-        # self.corrections: Dict[str, dict] = {}
-        # for phase in ['sky', 'spec', 'guiding', 'testing']:
-        #     self.corrections[phase] = {
-        #         'target': {'ra': None, 'dec': None},
-        #         'tolerance': {'ra': None, 'dec': None},
-        #         'sequence': [],
-        # }
-        # self.corrections: Dict[str, Corrections] | None = None
-
-        # self.latest_solver_result: PS3SolvingResult | None = None
 
         self._initialized = True
         logger.info("unit: initialized")
@@ -459,15 +449,15 @@ class Unit(Component):
                 logger.error(f"websocket.send error: {e}")
 
     def expose_with_roi(self,
-                        exposure_seconds: float | str = 3,
-                        repeats: int | str = 1,
-                        seconds_between_exposures: int | str = 0,
-                        fiber_x: int | str | None = None,
-                        fiber_y: int | str | None = None,
-                        width: int | str | None = None,
-                        height: int | str | None = None,
-                        binning: int | str = 1,
-                        gain: int | str = 170) -> CanonicalResponse:
+                        exposure_seconds: Union[float, str] = 3,
+                        repeats: Union[int, str] = 1,
+                        seconds_between_exposures: Union[float, str] = 0,
+                        fiber_x: Optional[Union[int, str]] = None,
+                        fiber_y: Optional[Union[int, str]] = None,
+                        width: Optional[Union[int, str]] = None,
+                        height: Optional[Union[int, str]] = None,
+                        binning: Union[int, str] = 1,
+                        gain: Union[int, str] = 170) -> CanonicalResponse:
 
         if fiber_x is None and fiber_y is None and width is None and height is None:
             width = self.camera.cameraXSize
@@ -479,15 +469,15 @@ class Unit(Component):
         return CanonicalResponse_Ok
 
     def do_expose_roi(self,
-                      exposure_seconds: float | str = 3,
-                      repeats: int | str = 1,
-                      seconds_between_exposures: float | str = 0,
-                      fiber_x: int | str = 6000,
-                      fiber_y: int | str = 2500,
-                      width: int | str = 1500,
-                      height: int | str = 1300,
-                      binning: int | str = 1,
-                      gain: int | str = 170) -> CanonicalResponse:
+                      exposure_seconds: Union[float, str] = 3,
+                      repeats: Union[int, str] = 1,
+                      seconds_between_exposures: Union[float, str] = 0,
+                      fiber_x: Union[int, str] = 6000,
+                      fiber_y: Union[int, str] = 2500,
+                      width: Union[int, str] = 1500,
+                      height: Union[int, str] = 1300,
+                      binning: Union[int, str] = 1,
+                      gain: Union[int, str] = 170) -> CanonicalResponse:
         op = function_name()
 
         seconds = float(exposure_seconds) if isinstance(exposure_seconds, str) else exposure_seconds
@@ -504,8 +494,9 @@ class Unit(Component):
         if _binning not in [1, 2, 4]:
             return CanonicalResponse(errors=[f"bad {_binning=}, should be 1, 2 or 4"])
 
+        self.mount.start_tracking()
         for repeat in range(repeats):
-            if seconds_between_exposures:
+            if seconds_between_exposures != 0.0:
                 start = datetime.datetime.now()
                 end = start + datetime.timedelta(seconds=seconds_between_exposures)
 
@@ -524,31 +515,34 @@ class Unit(Component):
             self.camera.wait_for_image_saved()
             Filer().move_ram_to_shared(self.camera.latest_settings.image_path)
 
-            if seconds_between_exposures:
-                period = (end - datetime.datetime.now()).seconds
-                logger.info(f"{op}: sleeping {period} seconds till next exposure ...")
-                time.sleep(period)
+            if seconds_between_exposures != 0.0:
+                now = datetime.datetime.now()
+                if now < end:
+                    period = (end - now).seconds
+                    logger.info(f"{op}: sleeping {period} seconds till next exposure ...")
+                    time.sleep(period)
 
+        self.mount.stop_tracking()
         return CanonicalResponse_Ok
 
     def test_stage_repeatability(self,
-                                 start_position: int | str = 50000,
-                                 end_position: int | str = 300000,
-                                 step: int | str = 25000,
-                                 exposure_seconds: int | str = 5,
-                                 binning: int | str = 1,
-                                 gain: int | str = 170) -> CanonicalResponse:
+                                 start_position: Union[int, str] = 50000,
+                                 end_position: Union[int, str] = 300000,
+                                 step: Union[int, str] = 25000,
+                                 exposure_seconds: Union[int, str] = 5,
+                                 binning: Union[int, str] = 1,
+                                 gain: Union[int, str] = 170) -> CanonicalResponse:
         Thread(name='test-stage-repeatability', target=self.do_test_stage_repeatability,
                args=[start_position, end_position, step, exposure_seconds, binning, gain]).start()
         return CanonicalResponse_Ok
 
     def do_test_stage_repeatability(self,
-                                    start_position: int | str = 50000,
-                                    end_position: int | str = 300000,
-                                    step: int | str = 25000,
-                                    exposure_seconds: int | str = 5,
-                                    binning: int | str = 1,
-                                    gain: int | str = 170) -> CanonicalResponse:
+                                    start_position: Union[int, str] = 50000,
+                                    end_position: Union[int, str] = 300000,
+                                    step: Union[int, str] = 25000,
+                                    exposure_seconds: Union[int, str] = 5,
+                                    binning: Union[int, str] = 1,
+                                    gain: Union[int, str] = 170) -> CanonicalResponse:
         op = function_name()
 
         if isinstance(start_position, str):
