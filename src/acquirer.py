@@ -4,8 +4,9 @@ from common.utils import function_name, Coord
 from common.paths import PathMaker
 from common.mast_logging import init_log
 from common.activities import UnitActivities
-from common.utils import UnitRoi
+from common.utils import UnitRoi, CanonicalResponse
 from common.corrections import correction_phases
+from common.filer import Filer, FilerTop
 from stage import StagePresetPosition
 from camera import CameraSettings, CameraBinning
 from astropy.coordinates import Angle
@@ -109,25 +110,22 @@ class Acquirer:
             logger.info(f"{op}: solve_and_correct failed")
         logger.info(f"{op}: solve_and_correct done.")
 
-    def do_acquire(self, target_ra_j2000_hours: float, target_dec_j2000_degs: float):
+    def do_acquire(self, acquisition: Acquisition):
         """
         Called from start_acquisition()
 
-        :param target_ra_j2000_hours:
-        :param target_dec_j2000_degs:
+        :param acquisition:
         :return:
         """
         op = function_name()
 
         self.unit.errors = []
         self.unit.reference_image = None
-        acquisition_conf = self.unit.unit_conf['acquisition']
 
-        self.latest_acquisition = Acquisition(
-            target_ra=target_ra_j2000_hours,
-            target_dec=target_dec_j2000_degs,
-            conf=acquisition_conf,
-        )
+        self.latest_acquisition = acquisition
+        acquisition_conf = acquisition.conf
+        target_ra_j2000_hours: float = acquisition.target_ra
+        target_dec_j2000_degs: float = acquisition.target_dec
 
         self.unit.start_activity(UnitActivities.Acquiring)
         phase = 'sky'
@@ -187,7 +185,7 @@ class Acquirer:
 
         if not achieved_tolerances:
             self.unit.end_activity(UnitActivities.Acquiring)
-            # TBD: stop mount tracking?
+            self.unit.mount.stop_tracking()
             return
 
         phase = 'spec'
@@ -215,7 +213,7 @@ class Acquirer:
         logger.info(f"{op}: {phase=} {achieved_tolerances=}")
         if not achieved_tolerances:
             self.unit.end_activity(UnitActivities.Acquiring)
-            # TBD: stop mount tracking?
+            self.unit.mount.stop_tracking()
             return
 
         self.unit.reference_image = self.unit.camera.image
@@ -224,17 +222,33 @@ class Acquirer:
         logger.info(f"{op}: >>>>>>>>>>>>>>>>>>>>>>>>>>")
         logger.info(f"{op}: >>> starting {phase=} <<<")
         logger.info(f"{op}: >>>>>>>>>>>>>>>>>>>>>>>>>>")
+
         # the guider runs until UnitActivities.Guiding is stopped
         self.unit.guider.do_guide_by_solving_with_shm(
             target=target,
             folder=os.path.join(self.latest_acquisition.folder, phase)
         )
 
+        self.unit.end_activity(UnitActivities.Acquiring)
+        self.unit.mount.stop_tracking()
         self.unit.acquirer.latest_acquisition.post_process()
-        # TBD: stop mount tracking?
 
     def start_acquisition(self, ra_j2000_hours: float, dec_j2000_degs: float):
-        Thread(name='acquisition', target=self.do_acquire, args=[ra_j2000_hours, dec_j2000_degs]).start()
+        """
+        Starts an acquisition
+
+        :param ra_j2000_hours: The target's RA
+        :param dec_j2000_degs: The target's Dec
+        :return: The folder path on the MAST-SHARE with the acquisition's products
+        """
+        acquisition = Acquisition(
+            target_ra=ra_j2000_hours,
+            target_dec=dec_j2000_degs,
+            conf=self.unit.unit_conf['acquisition'],
+        )
+        Thread(name='acquisition', target=self.do_acquire, args=[acquisition]).start()
+
+        return CanonicalResponse(value=Filer().change_top_to(FilerTop.Shared, acquisition.folder))
 
     def start_one_solve_and_correct(self, ra_j2000_hours: float, dec_j2000_degs: float):
         """
