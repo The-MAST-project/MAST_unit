@@ -52,7 +52,7 @@ class PS3AutofocusStatus(ExtendedBaseModel):
     is_running: bool
     last_log_message: Optional[str] = None
     error_message: Optional[str] = None
-    analysis_result: PS3FocusAnalysisResult
+    analysis_result: Optional[PS3FocusAnalysisResult] = None
 
 
 class Autofocuser:
