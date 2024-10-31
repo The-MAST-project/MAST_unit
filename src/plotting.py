@@ -3,13 +3,14 @@ import logging
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 from matplotlib.patches import Patch
 import sys
 import os
 from common.mast_logging import init_log
 from common.utils import function_name, Filer
 from common.corrections import correction_phases, Corrections
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 from astropy.coordinates import Angle
 import astropy.units as u
 import datetime
@@ -125,7 +126,7 @@ def plot_autofocus_analysis(result: 'PS3FocusAnalysisResult', folder: str | None
 def plot_phase_corrections(phase: str,  # one of ['sky', 'spec', 'guiding', 'acquisition']
                            corrections: Corrections,
                            file: str,   # .../<date>/Acquisitions/seq=<seq-number>,time=<start-time>,target=<target>
-                           end_of_phase: List[datetime.datetime] | None = None):
+                           ends_of_phases: Optional[List[datetime.datetime]] = None):
     ra_guiding_rms: float = 0
     dec_guiding_rms: float = 0
 
@@ -160,6 +161,8 @@ def plot_phase_corrections(phase: str,  # one of ['sky', 'spec', 'guiding', 'acq
         square_sum = sum(x**2 for x in dec_deltas)
         dec_guiding_rms = math.sqrt(square_sum / len(dec_deltas))
 
+    matplotlib.use("Agg")
+    plt.figure(figsize=(8, 6))
     plt.plot(t, ra_deltas, color=ra_color, label=f'Ra', marker='*')
     plt.plot(t, dec_deltas, color=dec_color, label=f'Dec', marker='*')
 
@@ -173,8 +176,8 @@ def plot_phase_corrections(phase: str,  # one of ['sky', 'spec', 'guiding', 'acq
                     label=f'Dec tolerance: {corrections.tolerance_dec:.2f}')
 
     with_label = True
-    if end_of_phase:
-        for t in end_of_phase:
+    if ends_of_phases:
+        for t in ends_of_phases:
             plt.axvline(x=(t - start).seconds, linestyle='--', color='black',
                         label=('End of phase' if with_label else None))
             if with_label:
@@ -210,7 +213,7 @@ def plot_phase_corrections(phase: str,  # one of ['sky', 'spec', 'guiding', 'acq
 
     file = file.replace('.json', '.png')
     plt.savefig(file, format='png')
-    # plt.clf()
+    # plt.close()
     logger.info(f"plot saved to '{file}'")
 
 
@@ -282,7 +285,7 @@ def plot_acquisition_corrections(acquisition_folder: str | None = None):
         end_of_phase.append(sequence[0].time)
 
     plot_phase_corrections(phase='acquisition', corrections=combined_corrections,
-                           file=os.path.join(acquisition_top, 'corrections.json'), end_of_phase=end_of_phase)
+                           file=os.path.join(acquisition_top, 'corrections.json'), ends_of_phases=end_of_phase)
 
 
 #
