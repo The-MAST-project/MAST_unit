@@ -112,18 +112,20 @@ class Guider:
         self.unit.start_activity(UnitActivities.Guiding)
         while self.unit.is_active(UnitActivities.Guiding):
             start = datetime.datetime.now()
-            end = start + datetime.timedelta(seconds=cadence)
+            if cadence != 0.0:
+                end = start + datetime.timedelta(seconds=cadence)
             self.unit.solver.solve_and_correct(target=target,
                                                camera_settings=guiding_settings,
                                                solving_tolerance=SolvingTolerance(tolerance, tolerance),
                                                phase='guiding',
                                                parent_activity=UnitActivities.Guiding)
 
-            now = datetime.datetime.now()
-            if now < end:
-                sec = (end - now).seconds
-                logger.info(f"sleeping {sec} seconds till end-of-cadence ...")
-                time.sleep(sec)
+            if cadence != 0.0:
+                now = datetime.datetime.now()
+                if now < end:
+                    sec = (end - now).seconds
+                    logger.info(f"sleeping {sec} seconds till end-of-cadence ...")
+                    time.sleep(sec)
 
         self.unit.acquirer.latest_acquisition.save_corrections('guiding')
 
