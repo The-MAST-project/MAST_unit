@@ -176,8 +176,8 @@ class Solver:
                           target: Coord,
                           camera_settings: CameraSettings,
                           solving_tolerance: SolvingTolerance,
-                          parent_activity: UnitActivities | None = None,
-                          phase: str | None = None,
+                          parent_activity: Optional[UnitActivities] = None,
+                          phase: Optional[str] = None,
                           max_tries: int = 3) -> bool:
         """
         Tries for max_tries times to:
@@ -200,6 +200,10 @@ class Solver:
         op = function_name()
         if phase:
             op += f":{phase}"
+
+        def was_cancelled() -> bool:
+            return (not self.unit.is_active(UnitActivities.Solving) or
+                    (parent_activity and not self.unit.is_active(parent_activity)))
 
         self.unit.start_activity(UnitActivities.Solving)
 
@@ -229,7 +233,7 @@ class Solver:
         latest_corrections = self.unit.acquirer.latest_acquisition.corrections[phase]
 
         for try_number in range(max_tries):
-            if parent_activity and not self.unit.is_active(parent_activity):  # have we been cancelled?
+            if was_cancelled():
                 return False
 
             logger.info(f"{op}: calling plate_solve ({try_number=} of {max_tries=})")
@@ -345,7 +349,7 @@ class Solver:
                     time.sleep(5)
                     self.unit.end_activity(UnitActivities.Correcting)
                     logger.info(f"{op}: {try_number=}, " +
-                                            f"corrected by {delta_ra_arcsec=:.6f}, {delta_dec_arcsec=:.6f}")
+                                f"corrected by {delta_ra_arcsec=:.6f}, {delta_dec_arcsec=:.6f}")
             else:
                 self.log_and_store_error(f"{op}: unknown/unexpected solver state '{result.state=}', continuing ...")
                 continue    # next try
@@ -355,6 +359,7 @@ class Solver:
         #
 
         logger.info(f"{op}: could not reach tolerances within {max_tries=}")
+        self.unit.end_activity(UnitActivities.Solving)
         return False
 
     def log_and_store_error(self, message: str):
