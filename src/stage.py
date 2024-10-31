@@ -1,9 +1,9 @@
 import logging
 import threading
 import time
-from enum import IntEnum, auto
+from enum import IntEnum, auto, Enum
 import datetime
-from typing import List
+from typing import List, Union, Literal
 
 from common.utils import RepeatTimer, Component, time_stamp, CanonicalResponse, CanonicalResponse_Ok
 from common.utils import BASE_UNIT_PATH, function_name
@@ -44,22 +44,16 @@ class StageDirection(IntEnum):
     Down = auto()
 
 
-class StagePresetPosition(IntEnum):
-    Sky = auto(),
-    Spec = auto(),
-    Min = auto(),
-    Middle = auto(),
-    Max = auto(),
+class StagePresetPosition(Enum):
+    Sky = 'sky',
+    Spec = 'spec',
+    Min = 'min',
+    Middle = 'mid',
+    Max = 'max',
     StartUp = Sky
 
 
-stage_position_str2int_dict: dict = {
-    'Min': StagePresetPosition.Min,
-    'Max': StagePresetPosition.Max,
-    'Middle': StagePresetPosition.Middle,
-    'Sky': StagePresetPosition.Sky,
-    'Spec': StagePresetPosition.Spec,
-}
+stagePositionNames: List[str] = [k for k in StagePresetPosition.__dict__.keys()]
 
 stage_direction_str2int_dict: dict = {
     'Up': StageDirection.Up,
@@ -68,7 +62,7 @@ stage_direction_str2int_dict: dict = {
 
 
 class Stage(Component, SwitchedPowerDevice, StoppingMonitor):
-# class Stage(Component, SwitchedOutlet, StoppingMonitor):
+    # class Stage(Component, SwitchedOutlet, StoppingMonitor):
     _instance = None
     _initialized = False
 
@@ -355,7 +349,7 @@ class Stage(Component, SwitchedPowerDevice, StoppingMonitor):
                 self.end_activity(StageActivities.StartingUp)
 
     #
-    def move_to_preset(self, preset: StagePresetPosition | str):
+    def move_to_preset(self, preset: Union[Literal['Sky', 'Spec', 'Min', 'Mid', 'Max'] | StagePresetPosition]):
         """
         Starts moving the stage to one of the preset positions
 
